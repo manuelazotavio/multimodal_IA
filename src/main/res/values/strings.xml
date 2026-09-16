@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">AV Tracker</string>
+    <string name="camera_permission_required">Camera permission is required to run detection</string>
+</resources>

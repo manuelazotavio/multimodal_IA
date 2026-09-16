@@ -4,6 +4,13 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 
+### Android ###
+local.properties
+*.apk
+*.aab
+.cxx/
+captures/
+
 ### IntelliJ IDEA ###
 .idea/modules.xml
 .idea/jarRepositories.xml
