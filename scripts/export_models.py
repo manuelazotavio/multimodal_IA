@@ -6,8 +6,10 @@ Gera em src/main/assets/:
   models/ecapa_voxceleb.onnx (embedding de voz 192-d, entrada 1xT waveform 16 kHz em [-1, 1])
   models/light_asd.onnx      (quem esta falando: 25 recortes 112x112 0-255 + 1 s de audio -> 25 probabilidades)
   models/pyannote_segmentation.onnx (diarizacao: waveform 1x1xT -> log-probs powerset 1xFx7, T dinamico)
-  profiles/<slug>.json       (um perfil facial por pessoa, formato VisualProfile.kt)
+  face_embeddings/<slug>.json (um JSON por arquivo .npy de data/face_embeddings: {"file", "embedding"})
   voice_embeddings/<slug>.json (um JSON por arquivo .npy de data/embeddings, formato StoredVoice.kt)
+  models/silero_vad_v6.onnx  (VAD do faster-whisper, copiado do pacote instalado)
+  models/wespeaker_resnet34.onnx (embedding de falante do pyannote 3.1: waveform 1x160000 + mascara 1x589; scripts/export_wespeaker.py)
 
 Uso (no env conda "tracker", que tem torch/ultralytics/timm/speechbrain):
   python scripts/export_models.py --av-tracker C:/Users/manu/av-tracker
@@ -20,7 +22,6 @@ import os
 import re
 import shutil
 import unicodedata
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -31,7 +32,6 @@ import torch.nn.functional as F
 from onnx_utils import shrink_fp16_storage
 
 OPSET = 17
-GENERIC_NAME = re.compile(r"^(Person_\d+|Unknown(_\d+)?)$")
 
 
 class EdgeFaceXXS(nn.Module):
@@ -255,56 +255,36 @@ def export_segmentation(out_path: Path) -> None:
     )
 
 
-def person_name_from_file(filename: str) -> str:
-    """Mesma regra de PersonIDTracker.load_known_embeddings."""
-    base = filename[:-4]
-    if base.endswith("_auto"):
-        base = base[:-5]
-    parts = base.split("_")
-    if len(parts) >= 3 and parts[-1].isdigit() and parts[-2].isdigit():
-        return "_".join(parts[:-2])
-    return base
-
-
 def slugify(name: str) -> str:
     ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]+", "_", ascii_name.lower()).strip("_") or "person"
 
 
-def export_profiles(emb_dir: Path, out_dir: Path) -> list[str]:
-    grouped: dict[str, list[np.ndarray]] = {}
-    for file in sorted(os.listdir(emb_dir)):
-        if not file.endswith(".npy"):
-            continue
-        name = person_name_from_file(file)
-        if GENERIC_NAME.match(name):
-            continue
-        grouped.setdefault(name, []).append(np.load(emb_dir / file).astype(np.float32).flatten())
+def export_face_embeddings(emb_dir: Path, out_dir: Path) -> int:
+    """Um JSON por arquivo .npy de data/face_embeddings (inclusive os genericos Person_N).
 
+    O app repete no aparelho o mesmo carregamento do PersonIDTracker (nome pelo arquivo, media por pessoa,
+    consolidacao, renomeacao e limpeza de arquivos), entao precisa dos arquivos crus, nao de um resumo por pessoa.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("*.json"):
         old.unlink()
 
-    created_at = datetime.now(timezone.utc).isoformat()
-    for name, embs in grouped.items():
-        avg = np.mean(embs, axis=0)
-        norm = np.linalg.norm(avg)
-        avg = avg / norm if norm > 0 else avg
-        profile = {
-            "name": name,
-            "averageEmbedding": [float(v) for v in avg],
-            "metadata": {
-                "personName": name,
-                "createdAt": created_at,
-                "numImages": len(embs),
-                "modelName": "edgeface_xxs",
-                "embeddingDimension": int(avg.shape[0]),
-                "imageQualityScore": 0.0,
-                "captureEnvironment": "auto_enrollment",
-            },
-        }
-        (out_dir / f"{slugify(name)}.json").write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
-    return sorted(grouped)
+    used: set[str] = set()
+    count = 0
+    for file in sorted(os.listdir(emb_dir)):
+        if not file.endswith(".npy"):
+            continue
+        slug = slugify(file[:-4])
+        while slug in used:  # colisao de slug (acentos removidos)
+            slug += "_x"
+        used.add(slug)
+        emb = np.load(emb_dir / file).astype(np.float32).flatten()
+        (out_dir / f"{slug}.json").write_text(
+            json.dumps({"file": file, "embedding": [float(v) for v in emb]}, ensure_ascii=False), encoding="utf-8"
+        )
+        count += 1
+    return count
 
 
 def export_voice_embeddings(emb_dir: Path, out_dir: Path) -> int:
@@ -335,6 +315,15 @@ def export_voice_embeddings(emb_dir: Path, out_dir: Path) -> int:
     return count
 
 
+def export_silero_vad(out: Path) -> None:
+    """O av-tracker transcreve com vad_filter=True: o faster-whisper usa este modelo Silero (ONNX, ~1.2 MB)."""
+    import faster_whisper
+
+    src = Path(faster_whisper.__file__).parent / "assets" / "silero_vad_v6.onnx"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, out)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--av-tracker", type=Path, required=True, help="Pasta do projeto av-tracker")
@@ -343,13 +332,17 @@ def main() -> None:
 
     export_yolo_face(args.av_tracker / "od_model/yolov8n-face.pt", args.assets / "models/yolov8n_face.onnx")
     export_edgeface(args.av_tracker / "od_model/edgeface_xxs.pt", args.assets / "models/edgeface_xxs.onnx")
-    names = export_profiles(args.av_tracker / "data/face_embeddings", args.assets / "profiles")
-    print(f"Perfis faciais exportados: {names}")
+    n = export_face_embeddings(args.av_tracker / "data/face_embeddings", args.assets / "face_embeddings")
+    print(f"Embeddings faciais exportados: {n} arquivos")
     export_ecapa(args.assets / "models/ecapa_voxceleb.onnx")
     before, after = shrink_fp16_storage(args.assets / "models/ecapa_voxceleb.onnx")
     print(f"ecapa_voxceleb.onnx: {before:.1f} MB -> {after:.1f} MB (fp16 storage)")
     export_light_asd(args.av_tracker, args.assets / "models/light_asd.onnx")
     export_segmentation(args.assets / "models/pyannote_segmentation.onnx")
+    export_silero_vad(args.assets / "models/silero_vad_v6.onnx")
+    from export_wespeaker import export as export_wespeaker
+
+    export_wespeaker(args.assets / "models/wespeaker_resnet34.onnx", shrink=True)
     n = export_voice_embeddings(args.av_tracker / "data/embeddings", args.assets / "voice_embeddings")
     print(f"Embeddings de voz exportados: {n} arquivos")
 

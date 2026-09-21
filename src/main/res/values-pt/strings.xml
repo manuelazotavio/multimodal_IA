@@ -1,0 +1,28 @@
+<resources>
+    <string name="app_name">AV Tracker</string>
+    <string name="camera_permission_required">A permissão da câmera é necessária para a detecção</string>
+    <string name="microphone_permission_required">Permissão do microfone negada: só vídeo (sem transcrição nem identificação de voz)</string>
+    <string name="status_loading">Carregando modelos…</string>
+    <string name="status_running">Ouvindo</string>
+    <string name="status_video_only">Só vídeo</string>
+    <string name="status_error">Não foi possível carregar os modelos: %1$s</string>
+    <string name="status_finishing">Encerrando a sessão…</string>
+    <string name="status_saving">Salvando a sessão…</string>
+    <string name="status_saving_voice">Salvando a voz de %1$s…</string>
+    <string name="status_saved">Sessão salva em %1$s</string>
+    <string name="status_save_failed">Não foi possível salvar a sessão: %1$s</string>
+    <string name="finish_session">Encerrar sessão</string>
+    <string name="num_speakers_title">Pessoas na reunião</string>
+    <string name="num_speakers_message">Quantas pessoas estão presentes? Deixe vazio para não limitar.</string>
+    <string name="num_speakers_hint">Sem limite</string>
+    <string name="ok">OK</string>
+    <string name="save">Salvar</string>
+    <string name="skip">Pular</string>
+    <string name="replay">Ouvir de novo</string>
+    <string name="speaker_name_hint">Nome</string>
+    <string name="speaker_dialog_title">%1$s (%2$d s de áudio) — %3$d/%4$d</string>
+    <string name="speaker_dialog_message">Quem é? O trecho está tocando. Deixe o nome vazio para pular (ou se houver várias pessoas misturadas).</string>
+    <string name="ai_analysis">Análise por IA dos nomes dos falantes (envia o texto da transcrição ao Hugging Face)</string>
+    <string name="hf_token_hint">Token do Hugging Face</string>
+    <string name="full_diarization">Diarização completa (pyannote 3.1, como o av-tracker: muito lenta no celular)</string>
+</resources>

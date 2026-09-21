@@ -39,8 +39,8 @@ data class TranscriptEntry(
  * [processChunk] does the work for one window and can be driven directly (tests, file input); [start] runs a
  * worker thread that feeds it from an [AudioTimeline].
  *
- * The LLM speaker analysis is not ported: run_multimodal_tracker.py constructs the transcriber with
- * `use_ai_analysis=False`, which makes that path return immediately.
+ * The LLM speaker analysis ([LlmSpeakerAnalysis]) is off unless an [LlmClient] is given, as run_multimodal_tracker.py
+ * constructs the transcriber with `use_ai_analysis=False`.
  */
 class FusionEngine(
     private val timeline: AudioTimeline,
@@ -58,7 +58,10 @@ class FusionEngine(
     private val onFaceRenamed: (personId: String, oldName: String, newName: String) -> Unit = { _, _, _ -> },
     private val clock: () -> Double = AudioUtils::nowSec,
     private val wallClockMillis: () -> Long = System::currentTimeMillis,
-    private val genderDetector: (FloatArray) -> String? = PitchGender::detect
+    private val genderDetector: (FloatArray) -> String? = PitchGender::detect,
+    /** The LLM behind the periodic speaker analysis; null (the av-tracker default, `use_ai_analysis=False`) turns it off. */
+    llm: LlmClient? = null,
+    llmInBackground: Boolean = true
 ) {
     private val face = faceTracker
     val sessionTracker = SessionSpeakerTracker(
@@ -76,6 +79,10 @@ class FusionEngine(
         verifierConfidenceMin = config.verifierConfidenceMin
     )
     val naming = SpeakerNaming(registry, verifier, book, voice, entities, faceTracker, config.numSpeakers, clock, genderDetector)
+    val llmAnalysis = LlmSpeakerAnalysis(
+        llm, registry, book, naming, config.numSpeakers,
+        transcript = { transcript }, segmentCount = { log.segmentMetrics.size }, background = llmInBackground
+    )
 
     private val entries = ArrayList<TranscriptEntry>()
     private val chunker = AudioChunker()
@@ -278,6 +285,9 @@ class FusionEngine(
         naming.updateNamesIncremental(decision.speakerId, text, audio)
         naming.detectContextNames(text, decision.speakerId)
         naming.applyContextNaming(decision.speakerId)
+
+        // Periodic LLM analysis for the speakers that are still unidentified.
+        llmAnalysis.maybeRun()
 
         synchronized(entries) { naming.deduceLastSpeaker(entries.map { it.speakerId }) }
 

@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
@@ -23,6 +24,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.fail
 
 /**
@@ -101,7 +103,12 @@ class PythonParityTest {
         val store = InMemoryVoiceStore(sc.getValue("seed_files").jsonArray.map {
             StoredVoice(it.jsonObject.getValue("name").jsonPrimitive.content, floats(it.jsonObject.getValue("vec")).toList())
         })
-        val verifier = SpeakerVerifier(store, 0.80f) { epoch }
+        // the calls the Python makes on its (recorded, never real) database: add_speaker, then the embedding row
+        val dbCalls = ArrayList<List<Any>>()
+        val verifier = SpeakerVerifier(store, 0.80f, onVoiceSaved = { name, embedding, file ->
+            dbCalls += listOf("add_speaker", name)
+            dbCalls += listOf("voice", name, file, Math.round(embedding.sumOf { it.toDouble() } * 1000) / 1000.0, embedding.size)
+        }) { epoch }
 
         val voiceObjs = sc.getValue("voices").jsonObject
         val vecs = voiceObjs.entries.associate { (k, v) -> k.toInt() to v.jsonObject.getValue("vec").jsonArray.map { it.jsonPrimitive.content.toDouble() }.toDoubleArray() }
@@ -124,15 +131,28 @@ class PythonParityTest {
         val renames = ArrayList<List<String?>>()
         val bridge = RegistryFaceBridge(registry, { knownFaces }) { old, new, track -> renames += listOf(old, new, track?.toString()) }
 
+        // the LLM: prompts are recorded, answers come from the scenario in call order ("{}" once they run out)
+        val llmCfg = sc.getValue("llm").jsonObject
+        val llmPrompts = ArrayList<String>()
+        val llmAnswers = ArrayDeque(llmCfg.getValue("responses").jsonArray.map { it.jsonPrimitive.content })
+        val llmClient = LlmClient { prompt, maxNewTokens, temperature ->
+            llmPrompts += prompt
+            assertEquals(150, maxNewTokens)
+            assertEquals(0.1, temperature)
+            llmAnswers.removeFirstOrNull() ?: "{}"
+        }
+
         val engine = FusionEngine(
             timeline = AudioTimeline(), turnDetector = TurnDetector { turns }, voice = voice, verifier = verifier,
             recognizer = recognizer, asd = asd, registry = registry,
             config = FusionConfig(language = language, numSpeakers = numSpeakers),
             entities = entities(sc), faceTracker = bridge, clock = clock, wallClockMillis = { (epoch * 1000).toLong() },
-            genderDetector = { audio -> genders[voiceCode(audio)] }
+            genderDetector = { audio -> genders[voiceCode(audio)] },
+            llm = if (llmCfg.getValue("enabled").jsonPrimitive.boolean) llmClient else null, llmInBackground = false
         )
 
         var seenEntries = 0
+        var seenPrompts = 0
         var seenMetrics = 0
         val steps = sc.getValue("steps").jsonArray
         val expected = sc.getValue("expected").jsonArray
@@ -148,6 +168,7 @@ class PythonParityTest {
                     step.getValue("bind").jsonObject.forEach { (name, pid) -> registry.bind(name, pid.jsonPrimitive.content) }
                     knownFaces = step.getValue("known_faces").jsonArray.map { it.jsonPrimitive.content }.toSet()
                 }
+                "llm" -> engine.llmAnalysis.identifySpeakers() // no effect when the LLM is off
                 "segment" -> {
                     val t = step.getValue("t").jsonPrimitive.content.toDouble()
                     val seconds = step.getValue("seconds").jsonPrimitive.content.toDouble()
@@ -210,7 +231,12 @@ class PythonParityTest {
                 put("files", strList(store.baseNames().sorted()))
                 put("renames", JsonArray(renames.map { r -> JsonArray(r.map { v -> v?.let(::JsonPrimitive) ?: JsonNull }) }))
                 put("session_ids", strList(engine.sessionTracker.ids.sorted()))
+                put("db", JsonArray(dbCalls.map { call ->
+                    JsonArray(call.map { v -> if (v is Number) JsonPrimitive(v) else JsonPrimitive(v.toString()) })
+                }))
+                put("llm_prompts", strList(llmPrompts.drop(seenPrompts)))
             }
+            seenPrompts = llmPrompts.size
             seenEntries = entries.size
             seenMetrics = metrics.size
 
@@ -227,8 +253,13 @@ class PythonParityTest {
     }
 
     /** Numbers compare as doubles (Python prints 0.5 where Kotlin may print 0.50). */
+    private val contextLine = Regex("(?m)^(Nomes mencionados na conversa: )(.*)$")
+
+    /** The names mentioned in the conversation come from a Python set, so their order is arbitrary: compare them sorted. */
+    private fun sortedNames(prompt: String) = contextLine.replace(prompt) { m -> m.groupValues[1] + m.groupValues[2].split(", ").sorted().joinToString(", ") }
+
     private fun normalize(e: JsonElement): JsonElement = when (e) {
-        is JsonPrimitive -> e.doubleOrNull?.let { JsonPrimitive(it) } ?: e
+        is JsonPrimitive -> e.doubleOrNull?.let { JsonPrimitive(it) } ?: (if (e.isString && "Nomes mencionados" in e.content) JsonPrimitive(sortedNames(e.content)) else e)
         is JsonArray -> JsonArray(e.map(::normalize))
         is JsonObject -> JsonObject(e.mapValues { normalize(it.value) })
         else -> e

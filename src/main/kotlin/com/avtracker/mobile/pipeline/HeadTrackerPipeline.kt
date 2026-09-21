@@ -1,146 +1,52 @@
 package com.avtracker.mobile.pipeline
 
 import android.graphics.Bitmap
-import android.util.Log
 import com.avtracker.mobile.detection.YoloDetector
 import com.avtracker.mobile.embedding.EdgeFaceEmbedder
-import com.avtracker.mobile.profile.VisualProfileDatabase
+import com.avtracker.mobile.tracking.PersonIdTracker
 import com.avtracker.mobile.tracking.Roi
-import com.avtracker.mobile.tracking.SimpleTracker
-import com.avtracker.mobile.tracking.TrackedPerson
+import com.avtracker.mobile.tracking.bytetrack.Detection
 
 /**
- * Port of HeadTrackerWithNameDisplay.process_frame() from personid_tracker.py:
- * detect heads -> motion track -> crop faces -> embed -> match against known
- * tracked persons by appearance -> identify against the profile database.
+ * The face side of run_multimodal_tracker.video_loop: YOLO face detection, the cap of [numSpeakers] largest faces,
+ * then [PersonIdTracker] (ByteTrack + EdgeFace identity matching, auto-enrolment, rename cycle).
  */
 class HeadTrackerPipeline(
     private val detector: YoloDetector,
     private val embedder: EdgeFaceEmbedder,
-    private val database: VisualProfileDatabase,
-    private val identificationThreshold: Float = 0.6f,
-    private val appearanceThreshold: Float = 0.5f,
-    private val staleTimeoutMs: Long = 3000L
+    val tracker: PersonIdTracker,
+    private val numSpeakers: Int? = null
 ) {
-    private val motionTracker = SimpleTracker()
-    private val trackedPersons = mutableMapOf<Int, TrackedPerson>()
-    private val availableIds = sortedSetOf<Int>()
-    private var nextPersonIdCounter = 1
-
     fun processFrame(frame: Bitmap): FrameResult {
-        val headRois = detector.detectHeads(frame).map {
-            Roi.clamped(it.x1, it.y1, it.x2, it.y2, it.confidence)
+        var heads = detector.detectHeads(frame)
+        if (numSpeakers != null && numSpeakers > 0 && heads.size > numSpeakers) {
+            heads = heads.sortedByDescending { (it.x2 - it.x1) * (it.y2 - it.y1) }.take(numSpeakers)
+        }
+        val detections = heads.map {
+            Detection(it.x1.toDouble(), it.y1.toDouble(), it.x2.toDouble(), it.y2.toDouble(), it.confidence.toDouble())
         }
 
-        val motionTracks = motionTracker.update(headRois)
-        val (faceCrops, validTracks) = extractFaceCrops(frame, motionTracks)
-
-        val embeddings: List<FloatArray?> = if (faceCrops.isEmpty()) {
-            emptyList()
-        } else {
-            runCatching { embedder.extractEmbeddings(faceCrops) }
-                .onFailure { Log.e(TAG, "Embedding extraction failed", it) }
-                .getOrElse { List(faceCrops.size) { null } }
+        val faces = tracker.update(frame.width, frame.height, detections) { left, top, right, bottom ->
+            val crop = Bitmap.createBitmap(frame, left, top, right - left, bottom - top)
+            try {
+                embedder.extractEmbedding(crop)
+            } finally {
+                if (crop !== frame) crop.recycle()
+            }
         }
-
-        val persons = matchWithAppearance(validTracks, embeddings)
 
         return FrameResult(
-            persons = persons.map {
+            persons = faces.map {
                 TrackedPersonSnapshot(
                     trackId = it.trackId,
-                    bbox = it.bbox,
-                    displayName = it.displayName(),
-                    identified = it.identifiedName != null,
-                    name = it.identifiedName ?: "Person_${it.trackId}",
-                    confidence = it.identificationConfidence
+                    bbox = Roi(it.x1.toInt(), it.y1.toInt(), it.x2.toInt(), it.y2.toInt(), it.confidence.toFloat(), trackId = it.trackId),
+                    displayName = "${it.name} (%.2f)".format(java.util.Locale.ROOT, it.confidence),
+                    identified = it.name != PersonIdTracker.UNKNOWN,
+                    name = it.name,
+                    confidence = it.confidence.toFloat()
                 )
             },
-            knownDatabaseSize = database.size
+            knownDatabaseSize = tracker.knownNames.size
         )
-    }
-
-    private fun extractFaceCrops(frame: Bitmap, rois: List<Roi>): Pair<List<Bitmap>, List<Roi>> {
-        val crops = mutableListOf<Bitmap>()
-        val valid = mutableListOf<Roi>()
-
-        for (roi in rois) {
-            val x1 = roi.x1.coerceIn(0, frame.width)
-            val y1 = roi.y1.coerceIn(0, frame.height)
-            val x2 = roi.x2.coerceIn(0, frame.width)
-            val y2 = roi.y2.coerceIn(0, frame.height)
-
-            if (x2 > x1 && y2 > y1 && (x2 - x1) > 10 && (y2 - y1) > 10) {
-                crops += Bitmap.createBitmap(frame, x1, y1, x2 - x1, y2 - y1)
-                valid += roi
-            }
-        }
-        return crops to valid
-    }
-
-    private fun matchWithAppearance(tracks: List<Roi>, embeddings: List<FloatArray?>): List<TrackedPerson> {
-        for (person in trackedPersons.values) person.matchedThisFrame = false
-
-        val matched = mutableListOf<TrackedPerson>()
-
-        for ((track, embedding) in tracks.zip(embeddings)) {
-            var bestId: Int? = null
-            var bestSimilarity = appearanceThreshold
-
-            if (embedding != null) {
-                for ((id, person) in trackedPersons) {
-                    if (person.matchedThisFrame) continue
-                    val personEmbedding = person.averageEmbedding() ?: continue
-                    val similarity = dot(embedding, personEmbedding)
-                    if (similarity > bestSimilarity) {
-                        bestSimilarity = similarity
-                        bestId = id
-                    }
-                }
-            }
-
-            val person = if (bestId != null) {
-                trackedPersons.getValue(bestId).also { it.update(track, embedding) }
-            } else {
-                val id = allocatePersonId()
-                TrackedPerson(id, track, embedding).also { trackedPersons[id] = it }
-            }
-            matched += person
-        }
-
-        for (person in matched) {
-            val embedding = person.embedding ?: continue
-            val (name, confidence) = database.identifyPerson(embedding, identificationThreshold)
-            person.setIdentity(name, confidence)
-        }
-
-        val now = System.currentTimeMillis()
-        val staleIds = trackedPersons.filterValues { now - it.lastSeen > staleTimeoutMs }.keys.toList()
-        for (id in staleIds) {
-            trackedPersons.remove(id)
-            availableIds += id
-        }
-
-        return matched
-    }
-
-    private fun allocatePersonId(): Int {
-        val reused = availableIds.firstOrNull()
-        return if (reused != null) {
-            availableIds.remove(reused)
-            reused
-        } else {
-            nextPersonIdCounter++
-        }
-    }
-
-    private fun dot(a: FloatArray, b: FloatArray): Float {
-        var sum = 0f
-        for (i in a.indices) sum += a[i] * b[i]
-        return sum
-    }
-
-    companion object {
-        private const val TAG = "HeadTrackerPipeline"
     }
 }

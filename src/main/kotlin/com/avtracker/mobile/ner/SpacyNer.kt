@@ -6,9 +6,6 @@ import com.avtracker.mobile.fusion.PyText
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import kotlin.math.sqrt
 
 @Serializable
 data class TensorInfo(val name: String, val shape: List<Int>)
@@ -53,26 +50,13 @@ data class NerEntity(val startToken: Int, val endToken: Int, val label: String)
  * maxout+LayerNorm mixing -> four residual convolution layers -> projection -> a greedy BILUO transition system.
  * Verified against the original on real transcripts (see NerParityTest).
  *
- * Not reproduced: the dependency parser that runs before `ner` in the spaCy pipeline only matters through sentence
- * boundaries, which forbid an entity from spanning two sentences. On av-tracker's own transcripts the entities are
- * identical with and without it.
+ * The dependency parser that runs before `ner` in the spaCy pipeline matters through sentence boundaries, which forbid an
+ * entity from spanning two sentences: [decode] takes them from [SpacyParser] when it is available.
  */
 class SpacyNerModel(private val meta: NerMeta, weights: ByteArray, private val norms: NormTables) {
-    private val tensors: Map<String, FloatArray>
-    private val shapes: Map<String, List<Int>>
-
-    init {
-        val buf = ByteBuffer.wrap(weights).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
-        val t = HashMap<String, FloatArray>()
-        val s = HashMap<String, List<Int>>()
-        for (info in meta.tensors) {
-            val n = info.shape.fold(1) { a, b -> a * b }
-            t[info.name] = FloatArray(n).also { buf.get(it) }
-            s[info.name] = info.shape
-        }
-        tensors = t
-        shapes = s
-    }
+    private val nn = NnWeights(meta.tensors, weights)
+    private val tok2vec = Tok2Vec(nn, meta.width, meta.seeds, meta.rows, meta.encoderDepth, meta.encoderPad, meta.maxoutPieces)
+    private val scorer = TransitionScorer(nn, meta.numFeatures, meta.hiddenWidth, meta.lowerPieces, meta.actions.size)
 
     // ---- lexical attributes -------------------------------------------------------------------------------------------
 
@@ -116,118 +100,18 @@ class SpacyNerModel(private val meta: NerMeta, weights: ByteArray, private val n
 
     // ---- network ------------------------------------------------------------------------------------------------------
 
-    private fun tensor(name: String) = tensors.getValue(name)
-
-    /** x [n, nI] times w [nO*nP, nI]^T plus b, max over the nP pieces -> [n, nO]. */
-    private fun maxout(x: Array<FloatArray>, wName: String, bName: String, nP: Int): Array<FloatArray> {
-        val w = tensor(wName)
-        val b = tensor(bName)
-        val shape = shapes.getValue(wName) // [nO, nP, nI]
-        val nO = shape[0]
-        val nI = shape[2]
-        return Array(x.size) { r ->
-            val row = x[r]
-            FloatArray(nO) { o ->
-                var best = Float.NEGATIVE_INFINITY
-                for (p in 0 until nP) {
-                    val base = (o * nP + p) * nI
-                    var sum = b[o * nP + p]
-                    for (i in 0 until nI) sum += row[i] * w[base + i]
-                    if (sum > best) best = sum
-                }
-                best
-            }
-        }
-    }
-
-    private fun layerNorm(x: Array<FloatArray>, gName: String, bName: String): Array<FloatArray> {
-        val g = tensor(gName)
-        val b = tensor(bName)
-        return Array(x.size) { r ->
-            val row = x[r]
-            var mean = 0.0
-            for (v in row) mean += v
-            mean /= row.size
-            var variance = 0.0
-            for (v in row) variance += (v - mean) * (v - mean)
-            variance = variance / row.size + 1e-8
-            val inv = 1.0 / sqrt(variance)
-            FloatArray(row.size) { i -> (((row[i] - mean) * inv).toFloat() * g[i]) + b[i] }
-        }
-    }
-
-    /** thinc `expand_window(window_size=1)`: each row concatenated with its neighbours, zeros beyond the edges. */
-    private fun window(x: Array<FloatArray>): Array<FloatArray> {
-        val width = x[0].size
-        return Array(x.size) { r ->
-            val out = FloatArray(width * 3)
-            if (r > 0) System.arraycopy(x[r - 1], 0, out, 0, width)
-            System.arraycopy(x[r], 0, out, width, width)
-            if (r < x.size - 1) System.arraycopy(x[r + 1], 0, out, 2 * width, width)
-            out
-        }
-    }
-
     /** Token vectors [n, hiddenWidth] from the attribute keys of each token. */
-    fun tokenVectors(keys: List<LongArray>): Array<FloatArray> {
-        val n = keys.size
-        val width = meta.width
-        val concat = Array(n) { FloatArray(width * 4) }
-        for (col in 0 until 4) {
-            val table = tensor("embed$col.E")
-            val rows = meta.rows[col].toLong()
-            for (t in 0 until n) {
-                for (h in SpacyHash.hashIds(keys[t][col], meta.seeds[col])) {
-                    val rowStart = ((h % rows).toInt()) * width
-                    for (i in 0 until width) concat[t][col * width + i] += table[rowStart + i]
-                }
-            }
-        }
+    fun tokenVectors(keys: List<LongArray>): Array<FloatArray> = tok2vec.encode(keys)
 
-        var x = layerNorm(maxout(concat, "mix0.W", "mix0.b", meta.maxoutPieces), "mix0.G", "mix0.beta")
-
-        // with_array(pad=4): the sequence is padded with 4 zero rows on each side, and the padding takes part in every layer.
-        val pad = meta.encoderPad
-        var flat = Array(n + 2 * pad) { r -> if (r in pad until pad + n) x[r - pad] else FloatArray(width) }
-        for (d in 1..meta.encoderDepth) {
-            val y = layerNorm(maxout(window(flat), "mix$d.W", "mix$d.b", meta.maxoutPieces), "mix$d.G", "mix$d.beta")
-            flat = Array(flat.size) { r -> FloatArray(width) { i -> flat[r][i] + y[r][i] } }
-        }
-        x = Array(n) { flat[pad + it] }
-
-        val w = tensor("proj.W")
-        val b = tensor("proj.b")
-        val nO = shapes.getValue("proj.W")[0]
-        return Array(n) { r -> FloatArray(nO) { o -> var s = b[o]; for (i in 0 until width) s += x[r][i] * w[o * width + i]; s } }
-    }
-
-    /** Greedy BILUO decoding of token vectors into entities. [isSpace] marks whitespace tokens, which cannot start one. */
-    fun decode(vectors: Array<FloatArray>, isSpace: BooleanArray): List<NerEntity> {
+    /**
+     * Greedy BILUO decoding of token vectors into entities. [isSpace] marks whitespace tokens, which cannot start one;
+     * [sentStart] marks the tokens the parser put at the start of a sentence (no entity may run into one).
+     */
+    fun decode(vectors: Array<FloatArray>, isSpace: BooleanArray, sentStart: BooleanArray? = null): List<NerEntity> {
         val n = vectors.size
         if (n == 0) return emptyList()
-
-        val nF = meta.numFeatures
-        val nH = meta.hiddenWidth
-        val nP = meta.lowerPieces
-        val nI = vectors[0].size
-        val lowerW = tensor("lower.W") // [nF, nH, nP, nI]
-        val pad = tensor("lower.pad")  // [nF, nH, nP]
-        val bias = tensor("lower.b")   // [nH, nP]
-        val upperW = tensor("upper.W") // [nActions, nH]
-        val upperB = tensor("upper.b")
+        scorer.prepare(vectors)
         val actions = meta.actions
-
-        // Precompute every (token, feature) contribution once: cached[t][f] is [nH * nP].
-        val cached = Array(n) { t ->
-            Array(nF) { f ->
-                FloatArray(nH * nP) { j ->
-                    val base = (f * nH * nP + j) * nI
-                    var s = 0f
-                    for (i in 0 until nI) s += vectors[t][i] * lowerW[base + i]
-                    s
-                }
-            }
-        }
 
         class Ent(val start: Int, var end: Int, val label: String)
         val ents = ArrayList<Ent>()
@@ -237,35 +121,18 @@ class SpacyNerModel(private val meta: NerMeta, weights: ByteArray, private val n
             val ids = intArrayOf(b, if (open) ents.last().start else -1, -1)
             if (ids[1] != -1) ids[2] = ids[0] - 1
 
-            val acc = FloatArray(nH * nP)
-            for (f in 0 until nF) {
-                val id = ids[f]
-                if (id < 0) for (j in acc.indices) acc[j] += pad[f * nH * nP + j]
-                else for (j in acc.indices) acc[j] += cached[id][f][j]
-            }
-            val hidden = FloatArray(nH) { h ->
-                var best = Float.NEGATIVE_INFINITY
-                for (p in 0 until nP) best = maxOf(best, acc[h * nP + p] + bias[h * nP + p])
-                best
-            }
-
             val bufferLength = n - b
-            var best = -1
-            var bestScore = 0f
-            for (a in actions.indices) {
+            val nextStartsSentence = sentStart != null && b + 1 < n && sentStart[b + 1]
+            val best = scorer.best(ids) { a ->
                 val (move, label) = actions[a]
-                val valid = when (move) {
-                    "B" -> !open && bufferLength >= 2 && label.isNotEmpty() && !isSpace[b]
-                    "I" -> open && bufferLength >= 2 && label.isNotEmpty() && ents.last().label == label
+                when (move) {
+                    "B" -> !open && bufferLength >= 2 && label.isNotEmpty() && !nextStartsSentence && !isSpace[b]
+                    "I" -> open && bufferLength >= 2 && label.isNotEmpty() && ents.last().label == label && !nextStartsSentence
                     "L" -> label.isNotEmpty() && open && ents.last().label == label
                     "U" -> label.isNotEmpty() && !open && !isSpace[b]
                     "O" -> !open
                     else -> false
                 }
-                if (!valid) continue
-                var score = upperB[a]
-                for (h in 0 until nH) score += hidden[h] * upperW[a * nH + h]
-                if (best == -1 || score > bestScore) { best = a; bestScore = score }
             }
             check(best >= 0) { "no valid NER action" }
 
@@ -286,7 +153,12 @@ class SpacyNerModel(private val meta: NerMeta, weights: ByteArray, private val n
  * [EntityExtractor] backed by the spaCy NER port: `_extract_names_with_ner` of RealtimeTranscriber, i.e. PERSON/PER
  * entities longer than two characters with a leading honorific ("Sr.", "Dra.", "Mr.", ...) removed.
  */
-class SpacyNer(private val tokenizer: SpacyTokenizer, private val model: SpacyNerModel) : EntityExtractor {
+class SpacyNer(
+    private val tokenizer: SpacyTokenizer,
+    private val model: SpacyNerModel,
+    /** The dependency parser whose sentence boundaries limit the entities; without it the whole text is one sentence. */
+    private val parser: SpacyParser? = null
+) : EntityExtractor {
     override val available: Boolean = true
 
     fun tokens(text: String): List<SpacyToken> = tokenizer.tokenize(text)
@@ -295,12 +167,32 @@ class SpacyNer(private val tokenizer: SpacyTokenizer, private val model: SpacyNe
 
     fun keysOf(token: SpacyToken): LongArray = model.attributeKeys(token)
 
+    private fun isSpace(tokens: List<SpacyToken>) =
+        BooleanArray(tokens.size) { i -> tokens[i].text.isNotEmpty() && tokens[i].text.all(SpacyTokenizer::isPySpace) }
+
+    /** The six attributes of the shared tok2vec: NORM, PREFIX, SUFFIX, SHAPE, SPACY (a space follows) and IS_SPACE. */
+    private fun parserKeys(text: String, tokens: List<SpacyToken>, isSpace: BooleanArray): List<LongArray> =
+        tokens.mapIndexed { i, t ->
+            val four = model.attributeKeys(t)
+            val spacy = if (t.end < text.length && text[t.end] == ' ') 1L else 0L
+            longArrayOf(four[0], four[1], four[2], four[3], spacy, if (isSpace[i]) 1L else 0L)
+        }
+
+    /** The dependency parse of [text], or null when the parser was not loaded. */
+    fun parse(text: String): ParseResult? {
+        val p = parser ?: return null
+        val tokens = tokenizer.tokenize(text)
+        val space = isSpace(tokens)
+        return p.parse(parserKeys(text, tokens, space), space)
+    }
+
     fun entities(text: String): List<Pair<NerEntity, String>> {
         val tokens = tokenizer.tokenize(text)
         if (tokens.isEmpty()) return emptyList()
         val vectors = model.tokenVectors(tokens.map(model::attributeKeys))
-        val isSpace = BooleanArray(tokens.size) { i -> tokens[i].text.isNotEmpty() && tokens[i].text.all(SpacyTokenizer::isPySpace) }
-        return model.decode(vectors, isSpace).map { ent ->
+        val isSpace = isSpace(tokens)
+        val sentenceStart = parser?.parse(parserKeys(text, tokens, isSpace), isSpace)?.sentenceStart
+        return model.decode(vectors, isSpace, sentenceStart).map { ent ->
             ent to text.substring(tokens[ent.startToken].idx, tokens[ent.endToken - 1].end)
         }
     }
@@ -321,15 +213,20 @@ class SpacyNer(private val tokenizer: SpacyTokenizer, private val model: SpacyNe
             val meta = json.decodeFromString(NerMeta.serializer(), File(folder, "model.json").readText())
             val norm = NormTables(json.decodeFromString(NormFile.serializer(), File(folder, "lexeme_norm.json").readText()))
             val tokenizer = SpacyTokenizer(TokenizerData.parse(File(folder, "tokenizer.json").readText()))
-            return SpacyNer(tokenizer, SpacyNerModel(meta, File(folder, "weights.bin").readBytes(), norm))
+            val parserFiles = File(folder, "parser.json") to File(folder, "parser_weights.bin")
+            val parser = if (parserFiles.first.exists() && parserFiles.second.exists()) {
+                SpacyParser(json.decodeFromString(ParserMeta.serializer(), parserFiles.first.readText()), parserFiles.second.readBytes())
+            } else null
+            return SpacyNer(tokenizer, SpacyNerModel(meta, File(folder, "weights.bin").readBytes(), norm), parser)
         }
 
         /** [language] is "en" or "pt", like FusionConfig.language; anything else falls back to English. */
         fun fromAssets(context: Context, language: String): SpacyNer {
             val dir = if (language == "pt") "pt" else "en"
             val folder = File(context.filesDir, "assets/ner/$dir")
-            for (name in listOf("model.json", "tokenizer.json", "lexeme_norm.json", "weights.bin")) {
-                com.avtracker.mobile.voice.AssetFiles.materialize(context, "ner/$dir/$name")
+            val available = context.assets.list("ner/$dir").orEmpty().toSet()
+            for (name in listOf("model.json", "tokenizer.json", "lexeme_norm.json", "weights.bin", "parser.json", "parser_weights.bin")) {
+                if (name in available) com.avtracker.mobile.voice.AssetFiles.materialize(context, "ner/$dir/$name")
             }
             return fromFolder(folder)
         }

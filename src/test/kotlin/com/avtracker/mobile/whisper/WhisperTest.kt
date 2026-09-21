@@ -54,7 +54,7 @@ class WhisperTest {
         assumeTrue("whisper assets not exported (run scripts/export_whisper.py)", modelReady)
 
         WhisperTranscriber.fromFolder(folder).use { whisper ->
-            val result = assertNotNull(whisper.transcribe(readWav("tts_en.wav"), "en"))
+            val result = assertNotNull(whisper.transcribeGreedy(readWav("tts_en.wav"), "en"))
             val ref = expected.getValue("en").jsonObject
 
             assertEquals(ref.getValue("text").jsonPrimitive.content, result.text)
@@ -69,7 +69,7 @@ class WhisperTest {
         assumeTrue("whisper assets not exported (run scripts/export_whisper.py)", modelReady)
 
         WhisperTranscriber.fromFolder(folder).use { whisper ->
-            val result = assertNotNull(whisper.transcribe(readWav("tts_pt.wav"), "pt"))
+            val result = assertNotNull(whisper.transcribeGreedy(readWav("tts_pt.wav"), "pt"))
             assertEquals(expected.getValue("pt").jsonObject.getValue("text").jsonPrimitive.content, result.text)
         }
     }
@@ -79,10 +79,11 @@ class WhisperTest {
         assumeTrue("whisper assets not exported (run scripts/export_whisper.py)", modelReady)
 
         WhisperTranscriber.fromFolder(folder).use { whisper ->
+            assertNull(whisper.transcribeGreedy(readWav("tts_en.wav"), "xx"))
             assertNull(whisper.transcribe(readWav("tts_en.wav"), "xx"))
             assertTrue(whisper.supports("pt") && !whisper.supports("xx"))
 
-            val silence = assertNotNull(whisper.transcribe(FloatArray(16_000 * 3), "en"))
+            val silence = assertNotNull(whisper.transcribeGreedy(FloatArray(16_000 * 3), "en"))
             // Whisper hallucinates on pure silence, which is why RealtimeTranscriber filters on no_speech_prob.
             assertTrue(silence.noSpeechProb > 0.3f || silence.avgLogProb < -0.5f, "silence: $silence")
         }

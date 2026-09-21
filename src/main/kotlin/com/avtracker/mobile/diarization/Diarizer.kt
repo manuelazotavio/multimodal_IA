@@ -33,14 +33,18 @@ class Diarizer(
 
     fun turns(audio: FloatArray, gapFillSec: Double, minTurnSec: Double): List<SpeakerTurn> {
         if (audio.size < MIN_SAMPLES) return emptyList()
+        return decodeTurns(logProbabilities(audio), gapFillSec, minTurnSec)
+    }
+
+    /** The model's powerset log-probabilities [frame][class] for [audio] (589 frames for 10 s). */
+    fun logProbabilities(audio: FloatArray): Array<FloatArray> {
         val input = OnnxTensor.createTensor(env, FloatBuffer.wrap(audio), longArrayOf(1, 1, audio.size.toLong()))
-        val logProbs = input.use {
+        return input.use {
             session.run(mapOf(inputName to it)).use { result ->
                 @Suppress("UNCHECKED_CAST")
                 (result[0].value as Array<Array<FloatArray>>)[0]
             }
         }
-        return decodeTurns(logProbs, gapFillSec, minTurnSec)
     }
 
     override fun close() = session.close()
@@ -53,7 +57,7 @@ class Diarizer(
         private const val MIN_SAMPLES = 1_600
 
         /** Powerset classes -> active local speakers: {}, {0}, {1}, {2}, {0,1}, {0,2}, {1,2}. */
-        private val POWERSET = arrayOf(
+        internal val POWERSET = arrayOf(
             booleanArrayOf(false, false, false),
             booleanArrayOf(true, false, false),
             booleanArrayOf(false, true, false),

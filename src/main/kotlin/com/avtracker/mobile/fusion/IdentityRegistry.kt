@@ -6,7 +6,7 @@ package com.avtracker.mobile.fusion
  */
 class IdentityRegistry {
     private var counter = 0
-    private val personNames = HashMap<String, String>()           // person_id -> display name
+    private val personNames = LinkedHashMap<String, String>()     // person_id -> display name (insertion-ordered like the Python dict)
     private val embeddingToPerson = HashMap<String, String>()     // known name -> person_id
     private var activeFaces: Map<Int, String> = emptyMap()        // face track_id -> person_id (insertion-ordered)
     private var faceNames: Map<Int, String> = emptyMap()          // face track_id -> name the face tracker gave it
@@ -27,7 +27,7 @@ class IdentityRegistry {
 
     @Synchronized fun knownPersonIds(): Set<String> = personNames.keys.toSet()
 
-    @Synchronized fun namesSnapshot(): Map<String, String> = HashMap(personNames)
+    @Synchronized fun namesSnapshot(): Map<String, String> = LinkedHashMap(personNames)
 
     /** name -> person_id bindings (Python `_emb_to_pid`). */
     @Synchronized fun bindingsSnapshot(): Map<String, String> = HashMap(embeddingToPerson)

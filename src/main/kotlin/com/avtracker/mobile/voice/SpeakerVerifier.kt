@@ -20,6 +20,11 @@ data class VerifierResult(
 class SpeakerVerifier(
     private val store: VoiceStore,
     val threshold: Float = 0.80f,
+    /**
+     * Called after a voice file is saved for a face-voice binding or a live embedding, with the `.npy` file name the
+     * Python would use (its `db.add_speaker` + `db.save_voice_embedding`). Auto-enrolment is not mirrored, as in Python.
+     */
+    private val onVoiceSaved: ((name: String, embedding: FloatArray, sourceFile: String) -> Unit)? = null,
     private val nowSec: () -> Double = { System.currentTimeMillis() / 1000.0 }
 ) {
     /** name -> centroid used for scoring (Python `embeddings`). */
@@ -101,8 +106,10 @@ class SpeakerVerifier(
     @Synchronized
     fun enrollFromFace(name: String, embedding: FloatArray) {
         val emb = AudioUtils.l2Normalize(embedding)
-        store.save("${name}_${timestamp()}_fvbind", emb)
+        val base = "${name}_${timestamp()}_fvbind"
+        store.save(base, emb)
         enroll(name, emb)
+        onVoiceSaved?.invoke(name, emb, "$base.npy")
     }
 
     /** Port of MultiSpeakerVerifier._process_audio_chunk (after the embedding has been computed). */
@@ -172,7 +179,11 @@ class SpeakerVerifier(
     }
 
     @Synchronized
-    fun save(name: String, embedding: FloatArray) = store.save("${name}_${timestamp()}", embedding)
+    fun save(name: String, embedding: FloatArray) {
+        val base = "${name}_${timestamp()}"
+        store.save(base, embedding)
+        onVoiceSaved?.invoke(name, embedding, "$base.npy")
+    }
 
     private fun mean(vectors: List<FloatArray>): FloatArray {
         val out = FloatArray(vectors[0].size)
@@ -207,6 +218,6 @@ class SpeakerVerifier(
         }
 
         fun fromMap(persons: Map<String, FloatArray>, threshold: Float = 0.80f, nowSec: () -> Double = { System.currentTimeMillis() / 1000.0 }) =
-            SpeakerVerifier(InMemoryVoiceStore(persons.map { (n, e) -> StoredVoice(n, e.toList()) }), threshold, nowSec)
+            SpeakerVerifier(InMemoryVoiceStore(persons.map { (n, e) -> StoredVoice(n, e.toList()) }), threshold, nowSec = nowSec)
     }
 }

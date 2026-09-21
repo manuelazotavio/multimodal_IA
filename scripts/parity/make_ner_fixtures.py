@@ -1,4 +1,5 @@
-"""Fixtures do spaCy para o NerParityTest (Kotlin): tokens, atributos, entidades e nomes, por idioma."""
+"""Fixtures do spaCy para o NerParityTest (Kotlin): tokens, atributos, entidades e nomes, por idioma.
+As entidades vem do pipeline COMPLETO (com o parser de dependencias)."""
 import glob
 import json
 import re
@@ -51,7 +52,7 @@ for name, lang in (("en_core_web_sm", "en"), ("pt_core_news_sm", "pt")):
     for i, text in enumerate(uniq):
         doc = nlp.make_doc(text)
         arr = doc.to_array([NORM, PREFIX, SUFFIX, SHAPE]).astype(np.uint64) if len(doc) else np.zeros((0, 4), np.uint64)
-        ref = nlp.get_pipe("ner")(nlp.make_doc(text))
+        ref = nlp(text)  # o pipeline completo, como o av-tracker (self.nlp(text)): o parser marca as fronteiras de sentenca
         names = [HONORIFIC.sub("", e.text.strip()) for e in ref.ents if e.label_ in ("PER", "PERSON") and len(e.text.strip()) > 2]
         case = {"text": text, "tokens": [[t.idx, t.text, t.norm_] for t in doc],
                 "ents": [[e.start, e.end, e.label_, e.text] for e in ref.ents], "names": names}

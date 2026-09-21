@@ -60,5 +60,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // Desktop ONNX Runtime so JVM unit tests can execute the exported models for real.
     testImplementation("com.microsoft.onnxruntime:onnxruntime:1.19.2")
+    // the JVM tests run TrackerDb's SQL on SQLite itself
+    testImplementation("org.xerial:sqlite-jdbc:3.46.1.3")
     testImplementation(kotlin("test-junit"))
 }

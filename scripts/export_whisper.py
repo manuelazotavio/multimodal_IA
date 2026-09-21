@@ -1,12 +1,14 @@
 """Exporta o Whisper (openai/whisper-<size>) para ONNX, pronto para o app Android.
 
 Gera em src/main/assets/whisper/:
-  encoder.onnx   audio [1, 480000] (30 s, 16 kHz, zero-padded) -> cross_k_i / cross_v_i de cada camada do decoder
-                 (o log-mel de 80 bandas roda dentro do grafo, igual ao WhisperFeatureExtractor)
+  encoder.onnx   audio [1, T] (16 kHz, T <= 480000, comprimento dinamico) -> cross_k_i / cross_v_i de cada camada do decoder.
+                 O log-mel de 80 bandas roda dentro do grafo e segue o FeatureExtractor do faster-whisper: 160 amostras
+                 de zeros no fim, o maximo do clamp so sobre o audio real e as features (nao o audio) completadas com
+                 zeros ate 3000 quadros.
   decoder.onnx   um passo do decoder com cache KV explicito: token, position, self_k_i/self_v_i, cross_k_i/cross_v_i
                  -> logits [1, vocab], novos self_k_i/self_v_i
   tokens.txt     base64 dos bytes de cada token (linha = id; vazio para tokens especiais)
-  meta.json      ids especiais, idiomas, listas de supressao, dimensoes
+  meta.json      ids especiais, idiomas, listas de supressao, dimensoes, prompts iniciais ja tokenizados
 
 Uso (env conda "tracker"): python scripts/export_whisper.py --model-dir <pasta openai/whisper-base>
   (baixe antes com huggingface_hub.snapshot_download("openai/whisper-base", local_dir=...))
@@ -28,7 +30,7 @@ N_FFT, HOP = 400, 160
 
 
 class WhisperEncoderKv(nn.Module):
-    """audio [1, 480000] -> log-mel -> encoder -> cross-attention K/V of every decoder layer."""
+    """audio [1, T] -> log-mel (faster-whisper style) -> encoder -> cross-attention K/V of every decoder layer."""
 
     def __init__(self, hf_model, mel_filters: np.ndarray):
         super().__init__()
@@ -44,13 +46,17 @@ class WhisperEncoderKv(nn.Module):
         self.register_buffer("mel", torch.from_numpy(mel_filters.T.copy()).float())  # [80, 201]
 
     def log_mel(self, audio):
+        """FeatureExtractor.__call__ of faster-whisper followed by `[..., :-1]`, the 3000-frame cap and pad_or_trim."""
+        audio = F.pad(audio, (0, 160))  # padding=160
         x = F.pad(audio[:, None, :], (N_FFT // 2, N_FFT // 2), mode="reflect")
-        spec = F.conv1d(x, self.kernel, stride=HOP)  # [1, 402, 3001]
+        spec = F.conv1d(x, self.kernel, stride=HOP)  # [1, 402, 1 + (T + 160) // 160]
         n_freq = N_FFT // 2 + 1
-        power = (spec[:, :n_freq] ** 2 + spec[:, n_freq:] ** 2)[:, :, :-1]  # drop the last frame -> 3000
+        power = (spec[:, :n_freq] ** 2 + spec[:, n_freq:] ** 2)[:, :, :-1]
         log_spec = torch.log10(torch.clamp(torch.matmul(self.mel, power), min=1e-10))
         log_spec = torch.maximum(log_spec, log_spec.amax(dim=(1, 2), keepdim=True) - 8.0)
-        return (log_spec + 4.0) / 4.0
+        feats = ((log_spec + 4.0) / 4.0)[:, :, :-1]  # content_frames = frames - 1
+        feats = feats[:, :, :3000]
+        return F.pad(feats, (0, 3000 - feats.shape[-1]))  # pad_or_trim: zeros in feature space
 
     def forward(self, audio):
         hidden = self.encoder(self.log_mel(audio)).last_hidden_state  # [1, 1500, C]
@@ -128,6 +134,18 @@ def byte_decoder():
     return {chr(c): b for b, c in zip(bs, cs)}
 
 
+# Prompts iniciais do av-tracker (realtime_transcriber._process_segment): "pt" para portugues, "en" para o resto.
+INITIAL_PROMPTS = {"pt": "Transcrição de conversa em português brasileiro.", "en": "Transcript of a conversation."}
+
+
+def encode_prompts(model_dir: Path) -> dict:
+    """faster-whisper: tokenizer.encode(" " + prompt.strip()) sem tokens especiais."""
+    from tokenizers import Tokenizer
+
+    tok = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
+    return {k: tok.encode(" " + v.strip(), add_special_tokens=False).ids for k, v in INITIAL_PROMPTS.items()}
+
+
 def export_tokens_and_meta(model_dir: Path, out_dir: Path, hf_model) -> None:
     vocab = json.loads((model_dir / "vocab.json").read_text(encoding="utf-8"))
     added = json.loads((model_dir / "added_tokens.json").read_text(encoding="utf-8"))
@@ -150,6 +168,9 @@ def export_tokens_and_meta(model_dir: Path, out_dir: Path, hf_model) -> None:
         "translate": gen["task_to_id"]["translate"],
         "noTimestamps": gen["no_timestamps_token_id"],
         "noSpeech": added["<|nocaptions|>"],
+        "startOfPrev": added["<|startofprev|>"],
+        "startOfLm": added["<|startoflm|>"],
+        "prompts": encode_prompts(model_dir),
         "languages": {k.strip("<|>"): v for k, v in gen["lang_to_id"].items()},
         "suppressTokens": gen["suppress_tokens"],
         "beginSuppressTokens": gen["begin_suppress_tokens"],
@@ -162,7 +183,7 @@ def export_tokens_and_meta(model_dir: Path, out_dir: Path, hf_model) -> None:
     (out_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8", newline="\n")
 
 
-def export(model_dir: Path, out_dir: Path, shrink: bool = True) -> None:
+def export(model_dir: Path, out_dir: Path, shrink: bool = True, encoder_only: bool = False) -> None:
     from transformers import WhisperFeatureExtractor, WhisperForConditionalGeneration
 
     hf = WhisperForConditionalGeneration.from_pretrained(str(model_dir), attn_implementation="eager").eval()
@@ -172,10 +193,18 @@ def export(model_dir: Path, out_dir: Path, shrink: bool = True) -> None:
 
     encoder = WhisperEncoderKv(hf, np.asarray(fe.mel_filters)).eval()
     torch.onnx.export(
-        encoder, torch.zeros(1, N_SAMPLES), str(out_dir / "encoder.onnx"),
+        encoder, torch.zeros(1, 16000 * 7), str(out_dir / "encoder.onnx"),
         input_names=["audio"], output_names=[f"cross_{kv}_{i}" for i in range(n) for kv in "kv"],
+        dynamic_axes={"audio": {1: "samples"}},
         opset_version=OPSET, do_constant_folding=True, dynamo=False,
     )
+    if encoder_only:
+        if shrink:
+            from onnx_utils import shrink_fp16_storage
+
+            before, after = shrink_fp16_storage(out_dir / "encoder.onnx")
+            print(f"encoder: {before:.1f} MB -> {after:.1f} MB (fp16 storage)")
+        return
 
     decoder = WhisperDecoderStep(hf).eval()
     self_names = [f"self_{kv}_{i}" for i in range(n) for kv in "kv"]
@@ -208,5 +237,15 @@ if __name__ == "__main__":
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parent.parent / "src/main/assets/whisper")
     parser.add_argument("--no-shrink", action="store_true", help="keep fp32 weights (about twice the size)")
+    parser.add_argument("--encoder-only", action="store_true", help="re-export only the encoder (decoder and meta untouched)")
+    parser.add_argument("--meta-only", action="store_true", help="rewrite only tokens.txt and meta.json (models untouched)")
     a = parser.parse_args()
-    export(a.model_dir, a.out, shrink=not a.no_shrink)
+    if a.meta_only:
+        import types
+
+        from transformers import WhisperConfig
+
+        a.out.mkdir(parents=True, exist_ok=True)
+        export_tokens_and_meta(a.model_dir, a.out, types.SimpleNamespace(config=WhisperConfig.from_pretrained(str(a.model_dir))))
+    else:
+        export(a.model_dir, a.out, shrink=not a.no_shrink, encoder_only=a.encoder_only)

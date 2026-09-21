@@ -141,9 +141,31 @@ def make_scenario(seed, with_ner):
                       "no_speech": rng.choice([0.01, 0.02, 0.05, 0.2, 0.7]), "logprob": round(rng.uniform(-1.6, -0.1), 2),
                       "asd": pick(), "guess": pick()})
 
+    # Analise por LLM (use_ai_analysis): um gerador separado, para nao mudar o resto do cenario. As respostas do "modelo"
+    # sao consumidas na ordem das chamadas, sejam elas periodicas (a cada 10 segmentos) ou passos "llm" explicitos.
+    lrng = random.Random(seed * 7919 + 13)
+    llm_names = people + ["joão silva", "ANA", "d'artagnan", "Laura", "  luísa  "]
+    generic_ids = ["spk_001", "spk_002", "spk_003", "spk_004", "spk_005", "spk_006", "Person_1", "Person_2", "spk_099"]
+
+    def llm_response():
+        kind = lrng.random()
+        if kind < 0.50:
+            picks = lrng.sample(generic_ids, lrng.randint(1, 3))
+            body = ", ".join('"%s": "%s"' % (g, lrng.choice(llm_names)) for g in picks)
+            return lrng.choice(["Aqui esta: {%s} Espero ter ajudado.", "{%s}", "Claro!\n{%s}\n"]) % body
+        if kind < 0.60: return '{"%s": "A"}' % lrng.choice(generic_ids)
+        if kind < 0.70: return '{"%s": 5, "%s": null}' % (lrng.choice(generic_ids), lrng.choice(generic_ids))
+        if kind < 0.80: return "Nao tenho certeza de nenhum nome."
+        if kind < 0.90: return '{"a": {"b": 1}}'
+        return '{"%s": "%s", "%s": "%s"}' % (lrng.choice(generic_ids), lrng.choice(llm_names), lrng.choice(generic_ids), lrng.choice(llm_names))
+
+    llm = {"enabled": lrng.random() < 0.7, "responses": [llm_response() for _ in range(8)]}
+    for _ in range(lrng.randint(1, 3)):
+        steps.insert(lrng.randint(len(steps) // 2, len(steps)), {"type": "llm"})
+
     return {"seed": seed, "ner": with_ner,
             "config": {"language": rng.choice(["en", "pt"]), "num_speakers": rng.choice([None, None, 2, 3, 4])},
-            "seed_files": seed_files, "voices": voices, "steps": steps}
+            "seed_files": seed_files, "voices": voices, "steps": steps, "llm": llm}
 
 
 def steps_last_faces(steps):
@@ -201,16 +223,54 @@ def make_audio(code, seconds):
     return np.where((idx // code) % 2 == 0, 0.2, -0.2).astype(np.float32)
 
 
+class RecorderDB:
+    """Substitui src.database: grava as chamadas de espelhamento em vez de abrir o SQLite (o av_tracker.db real nunca e tocado)."""
+
+    def __init__(self):
+        self.calls = []
+        self.ids = {}
+        self.names = {}
+
+    def add_speaker(self, name, gender=None):
+        self.calls.append(["add_speaker", name])
+        if name not in self.ids:
+            self.ids[name] = len(self.ids) + 1
+            self.names[self.ids[name]] = name
+        return self.ids[name]
+
+    def _save(self, kind, speaker_id, embedding, source_file):
+        emb = np.asarray(embedding, dtype=np.float32)
+        self.calls.append([kind, self.names[speaker_id], source_file, round(float(np.sum(emb)), 3), int(emb.size)])
+        return len(self.calls)
+
+    def save_voice_embedding(self, speaker_id, embedding, source_file=None):
+        return self._save("voice", speaker_id, embedding, source_file)
+
+    def save_face_embedding(self, speaker_id, embedding, source_file=None):
+        return self._save("face", speaker_id, embedding, source_file)
+
+
+def install_recorder_db():
+    """Instala o stub como `src.database` e devolve o gravador."""
+    import types as _types
+
+    recorder = RecorderDB()
+    module = _types.ModuleType("src.database")
+    module.get_db = lambda db_path=None: recorder
+    sys.modules["src.database"] = module
+    return recorder
+
+
 def run_python(scenario, av_tracker, ner_model):
     os.chdir(av_tracker)
     sys.path.insert(0, str(av_tracker))
     import logging
     logging.disable(logging.CRITICAL)
 
-    # O codigo original sincroniza cada voz salva com o SQLite do projeto (`from src.database import get_db`).
-    # Uma versao anterior deste script nao bloqueava isso e gravou dados falsos em av_tracker.db. Com None em
-    # sys.modules o import levanta ImportError, que o original ja captura ("DB sync failed") e ignora.
-    sys.modules["src.database"] = None
+    # O codigo original espelha cada voz salva no SQLite do projeto (`from src.database import get_db`). Uma versao
+    # anterior deste script nao bloqueava isso e gravou dados falsos em av_tracker.db. Agora `src.database` e um
+    # gravador em memoria: nada chega ao banco real, e as chamadas entram no estado esperado ("db").
+    recorder = install_recorder_db()
 
     real_dt = real_datetime_module.datetime
 
@@ -298,6 +358,23 @@ def run_python(scenario, av_tracker, ner_model):
     t._addressee_votes = defaultdict(lambda: defaultdict(int)); t._llm_analysis_interval = 10; t._llm_last_analysis = 0
     t._llm_client = None; t._segment_metrics = []; t._session_start = FakeDT.now(); t._whisper_size = "medium"
     t.llm = None
+
+    # LLM: o cliente do Hugging Face vira um "modelo" que grava os prompts e devolve as respostas do cenario, em ordem.
+    llm_prompts = []
+    llm_cfg = scenario["llm"]
+
+    class FakeLLM:
+        def __init__(self): self.queue = deque(llm_cfg["responses"])
+
+        def text_generation(self, prompt, model=None, max_new_tokens=None, temperature=None):
+            llm_prompts.append(prompt)
+            assert model == "mistralai/Mistral-7B-Instruct-v0.3" and max_new_tokens == 150 and temperature == 0.1
+            return self.queue.popleft() if self.queue else "{}"
+
+    if llm_cfg["enabled"]:
+        t.use_ai_analysis = True
+        t._llm_client = FakeLLM()
+    llm_seen = [0]
     t.nlp = None
     if ner_model:
         import spacy
@@ -338,6 +415,8 @@ def run_python(scenario, av_tracker, ner_model):
             "context": sorted(t._context_names), "verifier": sorted(verifier.embeddings.keys()),
             "files": sorted(f[:-4] for f in os.listdir(tmp) if f.endswith(".npy")), "renames": [list(r) for r in face.renames],
             "session_ids": sorted(t._session_unknown_embs.keys()),
+            "db": [list(c) for c in recorder.calls],
+            "llm_prompts": llm_prompts[llm_seen[0]:],
         }
 
     results = []
@@ -349,6 +428,8 @@ def run_python(scenario, av_tracker, ner_model):
             for nm, pid in step["bind"].items(): t._emb_to_pid[nm] = pid
             face._track_to_name = {int(k): v for k, v in step["face_names"].items()}
             face.known_embeddings = {n: 1 for n in step["known_faces"]}
+        elif step["type"] == "llm":
+            t._llm_identify_speakers()  # chamada explicita (sincrona); sem efeito se use_ai_analysis for False
         else:
             FakeClock.epoch = 1_800_000_000.0 + step["t"]
             Asd.active, Asd.guess = step.get("asd"), step.get("guess")
@@ -373,7 +454,9 @@ def run_python(scenario, av_tracker, ner_model):
                 install_pipeline(turns)
                 t._process_chunk(audio, chunk_wall_start=step["t"], new_zone_start_samples=int(step["zone"]))
             pending_texts.clear()
-        results.append(snapshot(t.full_transcript[n_entries:], t._segment_metrics[n_metrics:]))
+        snap = snapshot(t.full_transcript[n_entries:], t._segment_metrics[n_metrics:])
+        llm_seen[0] = len(llm_prompts)
+        results.append(snap)
     return results
 
 

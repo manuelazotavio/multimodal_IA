@@ -1,0 +1,895 @@
+[
+ {
+  "name": "en_plain",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    0,
+    22208
+   ],
+   [
+    26432,
+    87232
+   ]
+  ],
+  "duration_after_vad": 5.188,
+  "segments": [
+   {
+    "text": " Hello everyone. Today we are testing the speech recognition system on a phone.",
+    "avg_logprob": -0.06476414389908314,
+    "no_speech_prob": 0.004507246892899275,
+    "temperature": 0.0,
+    "compression_ratio": 1.0263157894736843,
+    "tokens": [
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "pt_plain",
+  "language": "pt",
+  "prompt": "Transcrição de conversa em português brasileiro.",
+  "vad": [
+   [
+    0,
+    30400
+   ],
+   [
+    35648,
+    112320
+   ]
+  ],
+  "duration_after_vad": 6.692,
+  "segments": [
+   {
+    "text": " Bom dia a todos. Hoje vamos testar o reconhecimento de fala no celular.",
+    "avg_logprob": -0.06436744724449359,
+    "no_speech_prob": 0.003100951435044408,
+    "temperature": 0.0,
+    "compression_ratio": 1.0289855072463767,
+    "tokens": [
+     19812,
+     6801,
+     257,
+     6321,
+     13,
+     34104,
+     5295,
+     1500,
+     289,
+     277,
+     9993,
+     675,
+     28317,
+     368,
+     21580,
+     572,
+     32378,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "en_padded",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    30016,
+    53952
+   ],
+   [
+    58176,
+    118976
+   ]
+  ],
+  "duration_after_vad": 5.296,
+  "segments": [
+   {
+    "text": " Hello everyone. Today we are testing the speech recognition system on a phone.",
+    "avg_logprob": -0.06422531325370073,
+    "no_speech_prob": 0.004605798050761223,
+    "temperature": 0.0,
+    "compression_ratio": 1.0263157894736843,
+    "tokens": [
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "pt_two_utterances",
+  "language": "pt",
+  "prompt": "Transcrição de conversa em português brasileiro.",
+  "vad": [
+   [
+    0,
+    30400
+   ],
+   [
+    35648,
+    65216
+   ],
+   [
+    75072,
+    131264
+   ]
+  ],
+  "duration_after_vad": 7.26,
+  "segments": [
+   {
+    "text": " Bom dia a todos. Hoje vamos testar o reconhecimento de fala no celular.",
+    "avg_logprob": -0.06076948266280325,
+    "no_speech_prob": 0.00523407943546772,
+    "temperature": 0.0,
+    "compression_ratio": 1.0289855072463767,
+    "tokens": [
+     19812,
+     6801,
+     257,
+     6321,
+     13,
+     34104,
+     5295,
+     1500,
+     289,
+     277,
+     9993,
+     675,
+     28317,
+     368,
+     21580,
+     572,
+     32378,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "en_noisy",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    0,
+    22208
+   ],
+   [
+    26432,
+    87232
+   ]
+  ],
+  "duration_after_vad": 5.188,
+  "segments": [
+   {
+    "text": " Hello everyone. Today we are testing the speech recognition system on a phone.",
+    "avg_logprob": -0.06229663034901023,
+    "no_speech_prob": 0.007595756556838751,
+    "temperature": 0.0,
+    "compression_ratio": 1.0263157894736843,
+    "tokens": [
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "pt_quiet",
+  "language": "pt",
+  "prompt": "Transcrição de conversa em português brasileiro.",
+  "vad": [
+   [
+    0,
+    30400
+   ],
+   [
+    35648,
+    112320
+   ]
+  ],
+  "duration_after_vad": 6.692,
+  "segments": [
+   {
+    "text": " Bom dia a todos. Hoje vamos testar o reconhecimento de fala no celular.",
+    "avg_logprob": -0.0683611788247761,
+    "no_speech_prob": 0.015864761546254158,
+    "temperature": 0.0,
+    "compression_ratio": 1.0289855072463767,
+    "tokens": [
+     19812,
+     6801,
+     257,
+     6321,
+     13,
+     34104,
+     5295,
+     1500,
+     289,
+     277,
+     9993,
+     675,
+     28317,
+     368,
+     21580,
+     572,
+     32378,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "en_forced_pt",
+  "language": "pt",
+  "prompt": "Transcrição de conversa em português brasileiro.",
+  "vad": [
+   [
+    0,
+    22208
+   ],
+   [
+    26432,
+    87232
+   ]
+  ],
+  "duration_after_vad": 5.188,
+  "segments": [
+   {
+    "text": " Olá a todos. Hoje estamos testando o sistema de reconhecimento de speech.",
+    "avg_logprob": -0.7300834225283729,
+    "no_speech_prob": 0.048882462084293365,
+    "temperature": 0.0,
+    "compression_ratio": 1.0136986301369864,
+    "tokens": [
+     41811,
+     257,
+     6321,
+     13,
+     34104,
+     10382,
+     1500,
+     1806,
+     277,
+     13245,
+     368,
+     9993,
+     675,
+     28317,
+     368,
+     6218,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "silence",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [],
+  "duration_after_vad": 0.0,
+  "segments": []
+ },
+ {
+  "name": "noise_only",
+  "language": "pt",
+  "prompt": "Transcrição de conversa em português brasileiro.",
+  "vad": [],
+  "duration_after_vad": 0.0,
+  "segments": []
+ },
+ {
+  "name": "en_cut",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    0,
+    22208
+   ],
+   [
+    26432,
+    56352
+   ]
+  ],
+  "duration_after_vad": 3.258,
+  "segments": [
+   {
+    "text": " Hello everyone. Today we are testing the speech",
+    "avg_logprob": -0.26449909508228303,
+    "no_speech_prob": 0.02769399620592594,
+    "temperature": 0.0,
+    "compression_ratio": 0.8545454545454545,
+    "tokens": [
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218
+    ]
+   }
+  ]
+ },
+ {
+  "name": "pt_short",
+  "language": "pt",
+  "prompt": "Transcrição de conversa em português brasileiro.",
+  "vad": [
+   [
+    0,
+    18624
+   ]
+  ],
+  "duration_after_vad": 1.164,
+  "segments": [
+   {
+    "text": " Para todos.",
+    "avg_logprob": -0.6502292901277542,
+    "no_speech_prob": 0.116639144718647,
+    "temperature": 0.0,
+    "compression_ratio": 0.5789473684210527,
+    "tokens": [
+     11107,
+     6321,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "en_repeated",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    0,
+    22208
+   ],
+   [
+    26432,
+    87232
+   ],
+   [
+    101184,
+    125632
+   ],
+   [
+    129856,
+    190656
+   ],
+   [
+    205120,
+    229056
+   ],
+   [
+    233280,
+    294080
+   ]
+  ],
+  "duration_after_vad": 15.812,
+  "segments": [
+   {
+    "text": " Hello everyone. Today we are testing the speech recognition system on a phone. Hello everyone. Today we are testing the speech recognition system on a phone. Hello everyone. Today we are testing the speech recognition system on a phone.",
+    "avg_logprob": -0.03300268688927526,
+    "no_speech_prob": 0.019341357052326202,
+    "temperature": 1.0,
+    "compression_ratio": 2.8780487804878048,
+    "tokens": [
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13,
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13,
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "en_noise_snr5",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    0,
+    22208
+   ],
+   [
+    26432,
+    87744
+   ]
+  ],
+  "duration_after_vad": 5.22,
+  "segments": [
+   {
+    "text": " Hello everyone. Today we are testing the speech recognition system on a phone.",
+    "avg_logprob": -0.10374581906944513,
+    "no_speech_prob": 0.031823765486478806,
+    "temperature": 0.0,
+    "compression_ratio": 1.0263157894736843,
+    "tokens": [
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "pt_noise_snr5",
+  "language": "pt",
+  "prompt": "Transcrição de conversa em português brasileiro.",
+  "vad": [
+   [
+    0,
+    28352
+   ],
+   [
+    35648,
+    111808
+   ]
+  ],
+  "duration_after_vad": 6.532,
+  "segments": [
+   {
+    "text": " Bom dia a todos. Hoje vamos testar o reconhecimento de fala no celular.",
+    "avg_logprob": -0.3522166201942845,
+    "no_speech_prob": 0.0754031166434288,
+    "temperature": 0.0,
+    "compression_ratio": 1.0289855072463767,
+    "tokens": [
+     19812,
+     6801,
+     257,
+     6321,
+     13,
+     34104,
+     5295,
+     1500,
+     289,
+     277,
+     9993,
+     675,
+     28317,
+     368,
+     21580,
+     572,
+     32378,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "en_fast",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    0,
+    16384
+   ],
+   [
+    16384,
+    62613
+   ]
+  ],
+  "duration_after_vad": 3.9133125,
+  "segments": [
+   {
+    "text": " Hello everyone. Today we are testing the speech recognition system on a phone.",
+    "avg_logprob": -0.10094272904098034,
+    "no_speech_prob": 0.02644047699868679,
+    "temperature": 0.0,
+    "compression_ratio": 1.0263157894736843,
+    "tokens": [
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "pt_slow",
+  "language": "pt",
+  "prompt": "Transcrição de conversa em português brasileiro.",
+  "vad": [
+   [
+    0,
+    40640
+   ],
+   [
+    53056,
+    157376
+   ]
+  ],
+  "duration_after_vad": 9.06,
+  "segments": [
+   {
+    "text": " Bom dia a todos. Hoje vamos testar o reconhecimento de fala no celular.",
+    "avg_logprob": -0.07037227796880823,
+    "no_speech_prob": 0.003812873736023903,
+    "temperature": 0.0,
+    "compression_ratio": 1.0289855072463767,
+    "tokens": [
+     19812,
+     6801,
+     257,
+     6321,
+     13,
+     34104,
+     5295,
+     1500,
+     289,
+     277,
+     9993,
+     675,
+     28317,
+     368,
+     21580,
+     572,
+     32378,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "en_lowpass",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    0,
+    22208
+   ],
+   [
+    26432,
+    87232
+   ]
+  ],
+  "duration_after_vad": 5.188,
+  "segments": [
+   {
+    "text": " Hello everyone. Today we are testing the speech recognition system on a phone.",
+    "avg_logprob": -0.06498122122138739,
+    "no_speech_prob": 0.015955442562699318,
+    "temperature": 0.0,
+    "compression_ratio": 1.0263157894736843,
+    "tokens": [
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "pt_forced_en",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    0,
+    30400
+   ],
+   [
+    35648,
+    112320
+   ]
+  ],
+  "duration_after_vad": 6.692,
+  "segments": [
+   {
+    "text": " Good morning to all. Today we are going to test the recognition of speaking in the cell phone.",
+    "avg_logprob": -0.32713793572925387,
+    "no_speech_prob": 0.009324906393885612,
+    "temperature": 0.0,
+    "compression_ratio": 1.146341463414634,
+    "tokens": [
+     2205,
+     2446,
+     281,
+     439,
+     13,
+     2692,
+     321,
+     366,
+     516,
+     281,
+     1500,
+     264,
+     11150,
+     295,
+     4124,
+     294,
+     264,
+     2815,
+     2593,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "pt_cut_mid",
+  "language": "pt",
+  "prompt": "Transcrição de conversa em português brasileiro.",
+  "vad": [
+   [
+    0,
+    30400
+   ],
+   [
+    35648,
+    54122
+   ]
+  ],
+  "duration_after_vad": 3.054625,
+  "segments": [
+   {
+    "text": " Bom dia a todos. Hoje vamos...",
+    "avg_logprob": -0.13761976030137804,
+    "no_speech_prob": 0.00670297397300601,
+    "temperature": 0.0,
+    "compression_ratio": 0.8333333333333334,
+    "tokens": [
+     19812,
+     6801,
+     257,
+     6321,
+     13,
+     34104,
+     5295,
+     485
+    ]
+   }
+  ]
+ },
+ {
+  "name": "en_noise_fast",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    0,
+    19136
+   ],
+   [
+    19264,
+    68800
+   ]
+  ],
+  "duration_after_vad": 4.292,
+  "segments": [
+   {
+    "text": " Hello everyone. Today we are testing the speech recognition system on a phone.",
+    "avg_logprob": -0.09893000358715653,
+    "no_speech_prob": 0.04258192330598831,
+    "temperature": 0.0,
+    "compression_ratio": 1.0263157894736843,
+    "tokens": [
+     2425,
+     1518,
+     13,
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "pt_noise_quiet",
+  "language": "pt",
+  "prompt": "Transcrição de conversa em português brasileiro.",
+  "vad": [
+   [
+    0,
+    27328
+   ],
+   [
+    35648,
+    110784
+   ]
+  ],
+  "duration_after_vad": 6.404,
+  "segments": [
+   {
+    "text": " Um dia a 12, hoje vamos ficar em dificuldade de falar em celular.",
+    "avg_logprob": -0.968912685618681,
+    "no_speech_prob": 0.09491437673568726,
+    "temperature": 0.4,
+    "compression_ratio": 1.0483870967741935,
+    "tokens": [
+     3301,
+     6801,
+     257,
+     2272,
+     11,
+     13458,
+     5295,
+     13646,
+     846,
+     29615,
+     48504,
+     368,
+     13536,
+     846,
+     32378,
+     13
+    ]
+   }
+  ]
+ },
+ {
+  "name": "en_tail_cut",
+  "language": "en",
+  "prompt": "Transcript of a conversation.",
+  "vad": [
+   [
+    0,
+    54464
+   ]
+  ],
+  "duration_after_vad": 3.404,
+  "segments": [
+   {
+    "text": " Today we are testing the speech recognition system on a phone.",
+    "avg_logprob": -0.03238703768986922,
+    "no_speech_prob": 0.06326352804899216,
+    "temperature": 0.0,
+    "compression_ratio": 0.9538461538461539,
+    "tokens": [
+     2692,
+     321,
+     366,
+     4997,
+     264,
+     6218,
+     11150,
+     1185,
+     322,
+     257,
+     2593,
+     13
+    ]
+   }
+  ]
+ }
+]

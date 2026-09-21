@@ -6,4 +6,23 @@
     <string name="status_running">Listening</string>
     <string name="status_video_only">Video only</string>
     <string name="status_error">Could not load models: %1$s</string>
+    <string name="status_finishing">Finishing session…</string>
+    <string name="status_saving">Saving session…</string>
+    <string name="status_saving_voice">Saving the voice of %1$s…</string>
+    <string name="status_saved">Session saved in %1$s</string>
+    <string name="status_save_failed">Could not save the session: %1$s</string>
+    <string name="finish_session">Finish session</string>
+    <string name="num_speakers_title">People in the meeting</string>
+    <string name="num_speakers_message">How many people are there? Leave empty for no limit.</string>
+    <string name="num_speakers_hint">No limit</string>
+    <string name="ok">OK</string>
+    <string name="save">Save</string>
+    <string name="skip">Skip</string>
+    <string name="replay">Replay</string>
+    <string name="speaker_name_hint">Name</string>
+    <string name="speaker_dialog_title">%1$s (%2$d s of audio) — %3$d/%4$d</string>
+    <string name="speaker_dialog_message">Who is this? The clip is playing. Leave the name empty to skip (or if several people are mixed).</string>
+    <string name="ai_analysis">AI analysis of speaker names (sends transcript text to Hugging Face)</string>
+    <string name="hf_token_hint">Hugging Face token</string>
+    <string name="full_diarization">Full diarization (pyannote 3.1, as av-tracker: very slow on a phone)</string>
 </resources>
