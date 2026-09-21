@@ -1,6 +1,5 @@
 plugins {
-    id("com.android.application") version "8.7.3"
-    id("org.jetbrains.kotlin.android") version "2.4.10"
+    id("com.android.application") version "9.4.0"
     id("org.jetbrains.kotlin.plugin.serialization") version "2.4.10"
 }
 
@@ -14,6 +13,9 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+
+        // Phones (arm64) and the x86_64 emulator; dropping the 32-bit ONNX Runtime libraries saves ~25 MB.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
     buildTypes {
@@ -27,19 +29,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
-    sourceSets["main"].apply {
-        kotlin.srcDirs("src/main/kotlin")
-        res.srcDirs("src/main/res")
-        assets.srcDirs("src/main/assets")
-        manifest.srcFile("src/main/AndroidManifest.xml")
-    }
-
-    sourceSets["test"].apply {
-        kotlin.srcDirs("src/test/kotlin")
+    testOptions {
+        unitTests.all { it.maxHeapSize = "2g" }
+        // android.util.Log calls in the engine become no-ops in JVM unit tests instead of throwing.
+        unitTests.isReturnDefaultValues = true
     }
 
     packaging {
@@ -64,5 +57,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    testImplementation(kotlin("test"))
+    testImplementation("junit:junit:4.13.2")
+    // Desktop ONNX Runtime so JVM unit tests can execute the exported models for real.
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.19.2")
+    testImplementation(kotlin("test-junit"))
 }

@@ -1,5 +1,7 @@
 package com.avtracker.mobile.tracking
 
+import java.util.Locale
+
 /**
  * Port of the Python TrackedPerson class. Frame-crop buffering (used in the
  * Python version only for potential future replay/export) is intentionally
@@ -60,7 +62,7 @@ class TrackedPerson(
     }
 
     fun displayName(): String =
-        identifiedName?.let { "$it (%.2f)".format(identificationConfidence) } ?: "Person $trackId"
+        identifiedName?.let { "$it (%.2f)".format(Locale.ROOT, identificationConfidence) } ?: "Person $trackId"
 
     fun averageEmbedding(): FloatArray? {
         if (embeddingsHistory.isEmpty()) return null

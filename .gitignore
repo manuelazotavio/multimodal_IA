@@ -4,6 +4,13 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 
+### App assets gerados por scripts/export_models.py (embeddings faciais sao dados biometricos) ###
+src/main/assets/profiles/
+src/main/assets/voice_embeddings/
+src/main/assets/models/*.onnx
+src/main/assets/whisper/
+src/main/assets/ner/
+
 ### Android ###
 local.properties
 *.apk

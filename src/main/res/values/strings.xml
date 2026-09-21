@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">AV Tracker</string>
     <string name="camera_permission_required">Camera permission is required to run detection</string>
+    <string name="microphone_permission_required">Microphone permission denied: running with video only (no transcript or voice ID)</string>
+    <string name="status_loading">Loading models…</string>
+    <string name="status_running">Listening</string>
+    <string name="status_video_only">Video only</string>
+    <string name="status_error">Could not load models: %1$s</string>
 </resources>

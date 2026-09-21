@@ -11,17 +11,18 @@ import android.graphics.Paint
 import java.nio.FloatBuffer
 
 /**
- * Unified YOLOv5 / YOLOv11 ONNX head detector.
+ * Unified YOLOv5 / YOLOv8 / YOLOv11 ONNX detector (heads or faces, class 0).
  *
- * Port of src/yolo_detector.py. The model format is auto-detected from the
- * number of output tensors, exactly like the Python version:
+ * The model format is auto-detected from the output tensors:
+ *  - YOLOv8 (Ultralytics export, e.g. yolov8n-face used by run_multimodal_tracker.py):
+ *    single channels-first output [1, 4 + nc, N] = rows xc, yc, w, h, class scores (no objectness).
+ *    Input is RGB in [0, 1] and the letterbox padding is gray (114), as Ultralytics does.
  *  - YOLOv5: single output [1, N, 7] = [xc, yc, w, h, obj, class0, class1]
  *  - YOLOv11: three outputs boxes[1,N,4] (y1,x1,y2,x2), scores[1,N], classes[1,N]
  *
- * Note: the Python pipeline feeds raw BGR frames (straight from cv2, no color
- * conversion) into the model, so the model was trained on B,G,R channel
- * order. To stay numerically identical, the input tensor built here keeps
- * that same B,G,R channel order instead of Android's natural RGB.
+ * Note: the legacy YOLOv5/YOLOv11 Python pipeline fed raw BGR frames (straight
+ * from cv2, no color conversion) into the model, so those two keep B,G,R
+ * channel order and black padding to stay numerically identical.
  */
 class YoloDetector(
     env: OrtEnvironment,
@@ -36,7 +37,7 @@ class YoloDetector(
     private val modelHeight: Int
     private val modelType: ModelType
 
-    private enum class ModelType { YOLOV5, YOLOV11 }
+    private enum class ModelType { YOLOV5, YOLOV8, YOLOV11 }
 
     init {
         val inputShape = (session.inputInfo.getValue(inputName).info as ai.onnxruntime.TensorInfo).shape
@@ -44,10 +45,21 @@ class YoloDetector(
         modelWidth = inputShape.getOrElse(3) { 640L }.let { if (it <= 0) 640 else it.toInt() }
 
         modelType = when (session.outputInfo.size) {
-            1 -> ModelType.YOLOV5
+            1 -> if (isChannelsFirst(session.outputInfo.values.first().info as ai.onnxruntime.TensorInfo)) {
+                ModelType.YOLOV8
+            } else {
+                ModelType.YOLOV5
+            }
             3 -> ModelType.YOLOV11
             else -> throw IllegalStateException("Unsupported model with ${session.outputInfo.size} outputs")
         }
+    }
+
+    // [1, 4 + nc, N] (YOLOv8) has far fewer attribute rows than detections; [1, N, 5 + nc] (YOLOv5) is the opposite.
+    private fun isChannelsFirst(output: ai.onnxruntime.TensorInfo): Boolean {
+        val attrs = output.shape.getOrElse(1) { -1L }
+        val detections = output.shape.getOrElse(2) { -1L }
+        return attrs > 0 && detections > 0 && attrs < detections
     }
 
     fun close() = session.close()
@@ -56,8 +68,9 @@ class YoloDetector(
     fun detectHeads(frame: Bitmap): List<HeadBox> = detect(frame, targetClass = 0)
 
     private fun detect(frame: Bitmap, targetClass: Int): List<HeadBox> {
-        val letterboxed = letterbox(frame, modelWidth, modelHeight)
-        val inputTensor = toBgrChwTensor(letterboxed.bitmap)
+        val isV8 = modelType == ModelType.YOLOV8
+        val letterboxed = letterbox(frame, modelWidth, modelHeight, if (isV8) YOLOV8_PAD_COLOR else Color.BLACK)
+        val inputTensor = toChwTensor(letterboxed.bitmap, bgr = !isV8)
 
         val outputs = inputTensor.use {
             session.run(mapOf(inputName to it))
@@ -66,6 +79,7 @@ class YoloDetector(
         return outputs.use {
             when (modelType) {
                 ModelType.YOLOV5 -> processYolov5(it, targetClass, letterboxed)
+                ModelType.YOLOV8 -> processYolov8(it, targetClass, letterboxed)
                 ModelType.YOLOV11 -> processYolov11(it, targetClass, letterboxed)
             }
         }
@@ -77,7 +91,9 @@ class YoloDetector(
 
     private class Letterbox(val bitmap: Bitmap, val padTop: Int, val padLeft: Int, val scaleRatio: Float)
 
-    private fun letterbox(frame: Bitmap, targetWidth: Int, targetHeight: Int): Letterbox {
+    private class Candidate(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val score: Float)
+
+    private fun letterbox(frame: Bitmap, targetWidth: Int, targetHeight: Int, padColor: Int): Letterbox {
         val ratio = minOf(targetWidth.toFloat() / frame.width, targetHeight.toFloat() / frame.height)
         val newWidth = (frame.width * ratio).toInt()
         val newHeight = (frame.height * ratio).toInt()
@@ -89,14 +105,14 @@ class YoloDetector(
 
         val padded = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(padded)
-        canvas.drawColor(Color.BLACK)
+        canvas.drawColor(padColor)
         canvas.drawBitmap(resized, padLeft.toFloat(), padTop.toFloat(), Paint(Paint.FILTER_BITMAP_FLAG))
         if (resized !== frame) resized.recycle()
 
         return Letterbox(padded, padTop, padLeft, ratio)
     }
 
-    private fun toBgrChwTensor(bitmap: Bitmap): OnnxTensor {
+    private fun toChwTensor(bitmap: Bitmap, bgr: Boolean): OnnxTensor {
         val w = bitmap.width
         val h = bitmap.height
         val pixels = IntArray(w * h)
@@ -109,10 +125,9 @@ class YoloDetector(
             val r = ((p shr 16) and 0xFF) / 255f
             val g = ((p shr 8) and 0xFF) / 255f
             val b = (p and 0xFF) / 255f
-            // B, G, R channel order to match the Python training/inference pipeline.
-            data[i] = b
+            data[i] = if (bgr) b else r
             data[channelSize + i] = g
-            data[2 * channelSize + i] = r
+            data[2 * channelSize + i] = if (bgr) r else b
         }
         bitmap.recycle()
 
@@ -126,8 +141,6 @@ class YoloDetector(
     @Suppress("UNCHECKED_CAST")
     private fun processYolov5(result: OrtSession.Result, targetClass: Int, box: Letterbox): List<HeadBox> {
         val raw = (result[0].value as Array<Array<FloatArray>>)[0] // [N, 7]
-
-        data class Candidate(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val score: Float)
 
         val candidates = mutableListOf<Candidate>()
         for (row in raw) {
@@ -153,6 +166,31 @@ class YoloDetector(
     }
 
     // ------------------------------------------------------------------
+    // YOLOv8 postprocessing (channels-first, no objectness)
+    // ------------------------------------------------------------------
+
+    @Suppress("UNCHECKED_CAST")
+    private fun processYolov8(result: OrtSession.Result, targetClass: Int, box: Letterbox): List<HeadBox> {
+        val raw = (result[0].value as Array<Array<FloatArray>>)[0] // [4 + nc, N]
+        val classScores = raw[4 + targetClass]
+
+        val candidates = mutableListOf<Candidate>()
+        for (i in classScores.indices) {
+            val score = classScores[i]
+            if (score <= confidenceThreshold) continue
+
+            val xc = raw[0][i]; val yc = raw[1][i]; val w = raw[2][i]; val h = raw[3][i]
+            candidates += Candidate(xc - w / 2f, yc - h / 2f, xc + w / 2f, yc + h / 2f, score)
+        }
+
+        return nms(candidates.map { floatArrayOf(it.x1, it.y1, it.x2, it.y2) }, candidates.map { it.score })
+            .map { idx ->
+                val c = candidates[idx]
+                unproject(c.x1, c.y1, c.x2, c.y2, c.score, box)
+            }
+    }
+
+    // ------------------------------------------------------------------
     // YOLOv11 postprocessing
     // ------------------------------------------------------------------
 
@@ -161,8 +199,6 @@ class YoloDetector(
         val boxes = (result[0].value as Array<Array<FloatArray>>)[0] // [N, 4] as (y1, x1, y2, x2)
         val scores = (result[1].value as Array<FloatArray>)[0]      // [N]
         val classes = (result[2].value as Array<FloatArray>)[0]     // [N]
-
-        data class Candidate(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val score: Float)
 
         val candidates = mutableListOf<Candidate>()
         for (i in boxes.indices) {
@@ -230,6 +266,8 @@ class YoloDetector(
     }
 
     companion object {
+        private val YOLOV8_PAD_COLOR = Color.rgb(114, 114, 114)
+
         fun fromAssets(context: Context, assetPath: String, confidenceThreshold: Float = 0.5f, nmsThreshold: Float = 0.45f): YoloDetector {
             val bytes = context.assets.open(assetPath).use { it.readBytes() }
             return YoloDetector(OrtEnvironment.getEnvironment(), bytes, confidenceThreshold, nmsThreshold)

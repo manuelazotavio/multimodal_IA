@@ -6,7 +6,10 @@ data class TrackedPersonSnapshot(
     val trackId: Int,
     val bbox: Roi,
     val displayName: String,
-    val identified: Boolean
+    val identified: Boolean,
+    /** Identity for the fusion layer: the recognised name, or the generic "Person_N" placeholder. */
+    val name: String = displayName,
+    val confidence: Float = 0f
 )
 
 data class FrameResult(

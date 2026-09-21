@@ -14,6 +14,9 @@ class VisualProfileDatabase private constructor(
 ) {
     val size: Int get() = knownPersons.size
 
+    /** Names with an enrolled face (Python `face_tracker.known_embeddings`). */
+    val names: Set<String> get() = knownPersons.keys
+
     fun identifyPerson(embedding: FloatArray, threshold: Float): Pair<String?, Float> {
         if (knownPersons.isEmpty()) return null to 0f
 

@@ -5,7 +5,7 @@ import android.graphics.Matrix
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import androidx.camera.core.toBitmap
+import com.avtracker.mobile.audio.AudioUtils
 import com.avtracker.mobile.pipeline.FrameResult
 import com.avtracker.mobile.pipeline.HeadTrackerPipeline
 
@@ -18,10 +18,14 @@ import com.avtracker.mobile.pipeline.HeadTrackerPipeline
  * STRATEGY_KEEP_ONLY_LATEST backpressure setting (applied by the caller)
  * plays the same "drop old frames under load" role as the Python
  * queue.Queue(maxsize=5).
+ *
+ * [onFrame] runs on the analysis thread while the bitmap is still alive, so the multimodal layer can crop faces
+ * from it; its return value is handed to [onResult] together with the result.
  */
-class CameraAnalyzer(
+class CameraAnalyzer<T>(
     private val pipeline: HeadTrackerPipeline,
-    private val onResult: (FrameResult, width: Int, height: Int, processingMs: Long) -> Unit
+    private val onFrame: (frame: Bitmap, result: FrameResult, timestampSec: Double) -> T,
+    private val onResult: (result: FrameResult, extra: T, width: Int, height: Int, processingMs: Long) -> Unit
 ) : ImageAnalysis.Analyzer {
 
     override fun analyze(imageProxy: ImageProxy) {
@@ -29,7 +33,8 @@ class CameraAnalyzer(
         try {
             val bitmap = imageProxy.toBitmap().rotated(imageProxy.imageInfo.rotationDegrees)
             val result = pipeline.processFrame(bitmap)
-            onResult(result, bitmap.width, bitmap.height, System.currentTimeMillis() - start)
+            val extra = onFrame(bitmap, result, AudioUtils.nowSec())
+            onResult(result, extra, bitmap.width, bitmap.height, System.currentTimeMillis() - start)
         } catch (t: Throwable) {
             Log.e("CameraAnalyzer", "Frame processing failed", t)
         } finally {

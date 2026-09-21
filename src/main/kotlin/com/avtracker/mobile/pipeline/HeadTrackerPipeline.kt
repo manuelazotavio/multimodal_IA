@@ -47,7 +47,14 @@ class HeadTrackerPipeline(
 
         return FrameResult(
             persons = persons.map {
-                TrackedPersonSnapshot(it.trackId, it.bbox, it.displayName(), it.identifiedName != null)
+                TrackedPersonSnapshot(
+                    trackId = it.trackId,
+                    bbox = it.bbox,
+                    displayName = it.displayName(),
+                    identified = it.identifiedName != null,
+                    name = it.identifiedName ?: "Person_${it.trackId}",
+                    confidence = it.identificationConfidence
+                )
             },
             knownDatabaseSize = database.size
         )
