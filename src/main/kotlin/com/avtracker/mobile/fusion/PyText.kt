@@ -4,9 +4,17 @@ import java.util.regex.Pattern
 
 /** Helpers that reproduce Python string/regex semantics where they differ from Kotlin's defaults. */
 object PyText {
+    // Android always uses Unicode character classes and rejects the JVM's explicit flag.
+    private val unicodeCharacterClassFlag = try {
+        Pattern.compile("", Pattern.UNICODE_CHARACTER_CLASS)
+        Pattern.UNICODE_CHARACTER_CLASS
+    } catch (_: IllegalArgumentException) {
+        0
+    }
+
     /** A regex with Python 3 `str` semantics: `\s`, `\w`, `\b` are Unicode-aware; optional IGNORECASE. */
     fun regex(pattern: String, ignoreCase: Boolean = false): Regex {
-        var flags = Pattern.UNICODE_CHARACTER_CLASS
+        var flags = unicodeCharacterClassFlag
         if (ignoreCase) flags = flags or Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
         return Pattern.compile(pattern, flags).toRegex()
     }

@@ -1,5 +1,6 @@
 package com.avtracker.mobile.ner
 
+import com.avtracker.mobile.fusion.PyText
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.regex.Pattern
@@ -34,8 +35,8 @@ class SpacyToken(val idx: Int, val text: String, val norm: String? = null) {
 
 /**
  * Port of spaCy's rule-based Tokenizer (3.8): whitespace-delimited chunks, exceptions, then prefixes, suffixes and
- * infixes peeled off with the language's regexes. Patterns are Python `re` patterns; they are compiled with
- * UNICODE_CHARACTER_CLASS to match Python 3's Unicode-aware `\w`, `\d`, `\s`.
+ * infixes peeled off with the language's regexes. Patterns use Python 3's Unicode-aware `\w`, `\d`, `\s`
+ * semantics on both Android and the desktop JVM.
  */
 class SpacyTokenizer(data: TokenizerData) {
     private val prefixRegex = compile(data.prefix)
@@ -45,9 +46,9 @@ class SpacyTokenizer(data: TokenizerData) {
     private val tokenMatchRegex = data.tokenMatch?.let(::compile)
     private val specials: Map<String, List<TokenSpec>> = data.rules.associate { it.string to it.tokens }
 
-    /** Python spells astral code points with an 8-digit U escape, Java as x{...}; all other syntax in the patterns is shared. */
+    /** Literal astral characters work on both ICU (Android) and the JVM, without escape-length limits. */
     private fun compile(p: String): Pattern =
-        Pattern.compile(p.replace(PY_ASTRAL) { "\\x{${it.groupValues[1]}}" }, Pattern.UNICODE_CHARACTER_CLASS)
+        PyText.regex(p.replace(PY_ASTRAL) { String(Character.toChars(it.groupValues[1].toInt(16))) }).toPattern()
 
     fun tokenize(text: String): List<SpacyToken> {
         val out = ArrayList<SpacyToken>()
