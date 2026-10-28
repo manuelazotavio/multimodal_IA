@@ -14,7 +14,8 @@ data class FusionConfig(
     val numSpeakers: Int? = null,
     val verifierConfidenceMin: Float = 0.70f,
     /** Name of the speech recognition model, recorded in the session metrics. */
-    val whisperModel: String = "base"
+    val whisperModel: String = "base",
+    val lowLatencyTranscription: Boolean = false
 )
 
 data class TranscriptEntry(
@@ -24,7 +25,8 @@ data class TranscriptEntry(
     val decision: String,
     val timeSec: Double,
     /** Wall-clock time, for the transcript file. */
-    val wallMillis: Long = System.currentTimeMillis()
+    val wallMillis: Long = System.currentTimeMillis(),
+    val uncertain: Boolean = false
 ) {
     /** "(Name)" for a real identity, otherwise the speaker id, so different unknown people stay distinguishable. */
     val label: String
@@ -81,11 +83,11 @@ class FusionEngine(
     val naming = SpeakerNaming(registry, verifier, book, voice, entities, faceTracker, config.numSpeakers, clock, genderDetector)
     val llmAnalysis = LlmSpeakerAnalysis(
         llm, registry, book, naming, config.numSpeakers,
-        transcript = { transcript }, segmentCount = { log.segmentMetrics.size }, background = llmInBackground
+        transcript = { transcript.filterNot { it.uncertain } }, segmentCount = { log.segmentMetrics.size }, background = llmInBackground
     )
 
     private val entries = ArrayList<TranscriptEntry>()
-    private val chunker = AudioChunker()
+    private val chunker = AudioChunker(lowLatency = config.lowLatencyTranscription)
 
     @Volatile private var running = false
     private var worker: Thread? = null
@@ -220,7 +222,11 @@ class FusionEngine(
         val segmentStartNanos = System.nanoTime()
 
         val whisperStart = System.nanoTime()
-        val result = recognizer.transcribe(audio, config.language) ?: return
+        val recognitionStart = System.nanoTime()
+        Log.d(TAG, "Transcribing ${audio.size.toDouble() / AudioUtils.SAMPLE_RATE}s with ${config.whisperModel} (${config.language})")
+        val result = recognizer.transcribe(audio, config.language)
+        Log.d(TAG, "Recognition completed in ${(System.nanoTime() - recognitionStart) / 1_000_000}ms; chars=${result?.text?.length ?: 0}")
+        if (result == null) return
         val whisperMs = (System.nanoTime() - whisperStart) / 1e6
         if (!TranscriptFilter.accept(result.text, result.avgLogProb, result.noSpeechProb, config.language)) return
         val text = result.text
@@ -282,12 +288,15 @@ class FusionEngine(
         }
 
         // Names from what is said: self-introductions, then vocatives/mentions.
-        naming.updateNamesIncremental(decision.speakerId, text, audio)
-        naming.detectContextNames(text, decision.speakerId)
-        naming.applyContextNaming(decision.speakerId)
+        val uncertain = result.avgLogProb < -1.0f
+        if (!uncertain) {
+            naming.updateNamesIncremental(decision.speakerId, text, audio)
+            naming.detectContextNames(text, decision.speakerId)
+            naming.applyContextNaming(decision.speakerId)
+        }
 
         // Periodic LLM analysis for the speakers that are still unidentified.
-        llmAnalysis.maybeRun()
+        if (!uncertain) llmAnalysis.maybeRun()
 
         synchronized(entries) { naming.deduceLastSpeaker(entries.map { it.speakerId }) }
 
@@ -310,7 +319,7 @@ class FusionEngine(
             segmentMs = (System.nanoTime() - segmentStartNanos) / 1e6, avgLogProb = result.avgLogProb, avgNoSpeech = result.noSpeechProb
         )
 
-        appendTranscript(TranscriptEntry(decision.speakerId, finalName, text, decision.label, clock(), nowMillis))
+        appendTranscript(TranscriptEntry(decision.speakerId, finalName, text, decision.label, clock(), nowMillis, uncertain))
     }
 
     /**

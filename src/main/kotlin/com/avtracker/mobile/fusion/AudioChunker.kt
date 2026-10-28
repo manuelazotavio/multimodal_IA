@@ -11,7 +11,7 @@ import com.avtracker.mobile.audio.AudioUtils
  *  - chunk 1: the next 15 s, all new (no overlap with chunk 0)
  *  - chunk k >= 2: 15 s windows advancing 5 s; the first 10 s are context, only the last 5 s are new
  */
-class AudioChunker {
+class AudioChunker(private val lowLatency: Boolean = false) {
     class Window(val startSec: Double, val endSec: Double, val newZoneStartSamples: Int)
 
     private var index = 0
@@ -21,6 +21,16 @@ class AudioChunker {
     fun next(timeline: AudioTimeline): Window? {
         if (!timeline.hasAudio) return null
         val start = cursorSec ?: timeline.startTimeSec.also { cursorSec = it }
+
+        if (lowLatency) {
+            // Four seconds of new audio each time, with up to four seconds of preceding context.
+            // No 15-second second-window warm-up and no overlapping new zones.
+            val end = start + 4.0
+            if (timeline.endTimeSec < end) return null
+            val contextStart = maxOf(timeline.startTimeSec, end - 8.0)
+            cursorSec = end
+            return Window(contextStart, end, ((start - contextStart) * AudioUtils.SAMPLE_RATE).toInt())
+        }
 
         val window = when (index) {
             0 -> Window(start, start + FIRST_WINDOW_SEC, 0)

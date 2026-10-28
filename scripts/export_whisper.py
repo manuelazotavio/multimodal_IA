@@ -161,6 +161,7 @@ def export_tokens_and_meta(model_dir: Path, out_dir: Path, hf_model) -> None:
 
     cfg = hf_model.config
     meta = {
+        "modelName": model_dir.name.removeprefix("whisper-"),
         "vocabSize": size,
         "eot": eot,
         "sot": gen["decoder_start_token_id"],

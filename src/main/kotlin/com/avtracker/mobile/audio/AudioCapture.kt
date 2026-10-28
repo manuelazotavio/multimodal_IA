@@ -26,14 +26,19 @@ class AudioCapture(private val onChunk: (chunk: FloatArray, startSec: Double) ->
             sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
         val bufferBytes = maxOf(minBytes, sampleRate * 2) // at least 1 s of PCM16
-        val record = AudioRecord(
-            MediaRecorder.AudioSource.MIC, sampleRate,
-            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferBytes
-        )
-        if (record.state != AudioRecord.STATE_INITIALIZED) {
-            record.release()
-            throw IllegalStateException("AudioRecord failed to initialize (is RECORD_AUDIO granted?)")
-        }
+        // Recognition preset avoids the default microphone preprocessing where supported.
+        // Keep MIC as a fallback for devices which cannot initialize this public preset.
+        val record = listOf(MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC)
+            .firstNotNullOfOrNull { source ->
+                runCatching {
+                    AudioRecord(source, sampleRate, AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT, bufferBytes)
+                }.getOrNull()?.let { candidate ->
+                    if (candidate.state == AudioRecord.STATE_INITIALIZED) candidate
+                    else { candidate.release(); null }
+                }
+            } ?: throw IllegalStateException("AudioRecord failed to initialize (is RECORD_AUDIO granted?)")
+        Log.i(TAG, "Capture source=${record.audioSource}, rate=${record.sampleRate}, channels=${record.channelCount}, bufferBytes=$bufferBytes")
 
         running = true
         thread = Thread({ readLoop(record) }, "audio-capture").also { it.start() }

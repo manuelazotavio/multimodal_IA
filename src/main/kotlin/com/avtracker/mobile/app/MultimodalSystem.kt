@@ -40,6 +40,7 @@ import com.avtracker.mobile.voice.VoiceEmbedder
 import com.avtracker.mobile.voice.DirectoryVoiceStore
 import com.avtracker.mobile.ner.SpacyNer
 import com.avtracker.mobile.whisper.WhisperTranscriber
+import com.avtracker.mobile.whisper.WhisperModel
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
@@ -53,7 +54,7 @@ class FrameOverlay(val labels: Map<Int, FaceLabel>, val speaking: Set<Int>)
  * [IdentityRegistry] and the active-speaker detector.
  */
 class MultimodalSystem private constructor(
-    val facePipeline: HeadTrackerPipeline,
+    override val facePipeline: HeadTrackerPipeline,
     private val registry: IdentityRegistry,
     private val faceSync: FaceIdentitySync,
     private val asd: ActiveSpeakerDetector,
@@ -67,12 +68,12 @@ class MultimodalSystem private constructor(
     private val sessionDir: File,
     private val database: TrackerDb,
     private val closeables: List<AutoCloseable>
-) : AutoCloseable {
+) : TrackingSession {
 
-    val transcript: List<TranscriptEntry> get() = fusion.transcript
+    override val transcript: List<TranscriptEntry> get() = fusion.transcript
 
     /** Called from the camera analysis thread after the face pipeline has processed [frame]. */
-    fun onFrame(frame: Bitmap, result: FrameResult, timestampSec: Double): FrameOverlay {
+    override fun onFrame(frame: Bitmap, result: FrameResult, timestampSec: Double): FrameOverlay {
         val faces = FaceIdentitySync.fromSnapshots(result.persons)
         val current = faceSync.sync(faces)
 
@@ -88,7 +89,7 @@ class MultimodalSystem private constructor(
     }
 
     /** Needs the RECORD_AUDIO permission. The microphone is also recorded to a WAV file, saved with the session. */
-    fun startAudio() {
+    override fun startAudio() {
         sessionDir.mkdirs()
         recorder.getAndSet(WavWriter(File(sessionDir, RECORDING_FILE)))?.close()
         capture.start()
@@ -96,7 +97,7 @@ class MultimodalSystem private constructor(
     }
 
     /** Stops listening. The recording is finalised; [saveSession] keeps it. */
-    fun stopAudio() {
+    override fun stopAudio() {
         capture.stop()
         fusion.stop()
         recorder.getAndSet(null)?.close()
@@ -105,16 +106,16 @@ class MultimodalSystem private constructor(
     // ---- end of session: name the unidentified voices, then save (run_multimodal_tracker.run) ----
 
     /** Anonymous speakers with at least 5 s of audio, worth asking the user to name. */
-    fun pendingSpeakers(): List<SpeakerNaming.PendingSpeaker> = fusion.naming.unidentifiedSpeakers()
+    override fun pendingSpeakers(): List<SpeakerNaming.PendingSpeaker> = fusion.naming.unidentifiedSpeakers()
 
     /** Up to 10 s of the speaker's voice, normalised for playback (16 kHz mono floats). */
-    fun previewAudio(pending: SpeakerNaming.PendingSpeaker): FloatArray = fusion.naming.previewAudio(pending.speakerId)
+    override fun previewAudio(pending: SpeakerNaming.PendingSpeaker): FloatArray = fusion.naming.previewAudio(pending.speakerId)
 
     /** The user named [pending]: the voice is stored under [name] and the session updated. */
-    fun enrollSpeaker(pending: SpeakerNaming.PendingSpeaker, name: String) = fusion.naming.enrollPostSession(pending, name)
+    override fun enrollSpeaker(pending: SpeakerNaming.PendingSpeaker, name: String) = fusion.naming.enrollPostSession(pending, name)
 
     /** Port of save_session: transcript, FN/FP reports, metrics (with the face section) and the recorded audio. */
-    fun saveSession(): SavedSession = SessionSaver.save(
+    override fun saveSession(): SavedSession = SessionSaver.save(
         dir = sessionDir,
         nowMillis = System.currentTimeMillis(),
         entries = fusion.transcript,
@@ -150,7 +151,8 @@ class MultimodalSystem private constructor(
              * segmentation-only turns. It is what av-tracker runs, but on a phone it takes far longer than the 5 s it has per
              * window, so the transcript falls behind: off by default.
              */
-            fullDiarization: Boolean = false
+            fullDiarization: Boolean = false,
+            whisperModel: WhisperModel = WhisperModel.BASE
         ): MultimodalSystem {
             val env = OrtEnvironment.getEnvironment()
             val closeables = mutableListOf<AutoCloseable>()
@@ -174,7 +176,7 @@ class MultimodalSystem private constructor(
             val voice = VoiceEmbedder.fromAssets(context, "models/ecapa_voxceleb.onnx")
             val segmentation = Diarizer.fromAssets(context, "models/pyannote_segmentation.onnx")
             val diarizer: TurnDetector = if (fullDiarization) PyannoteDiarizer.fromAssets(context, segmentation, numSpeakers) else segmentation
-            val whisper = WhisperTranscriber.fromAssets(context, "whisper")
+            val whisper = WhisperTranscriber.fromAssets(context, whisperModel.assetDirectory, whisperModel.decodingOptions())
             closeables += listOf(voice, diarizer as AutoCloseable, whisper)
 
             val timeline = AudioTimeline()
@@ -186,7 +188,8 @@ class MultimodalSystem private constructor(
 
             // run_multimodal_tracker.py transcribes English (AMI); use Portuguese on Portuguese devices.
             val language = if (Locale.getDefault().language == "pt") "pt" else "en"
-            val fusionConfig = FusionConfig(language = language, numSpeakers = numSpeakers)
+            val fusionConfig = FusionConfig(language = language, numSpeakers = numSpeakers, whisperModel = whisper.modelName,
+                lowLatencyTranscription = !fullDiarization && whisperModel != WhisperModel.SMALL)
             val fusion = FusionEngine(
                 timeline = timeline,
                 turnDetector = diarizer,

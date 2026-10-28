@@ -88,4 +88,16 @@ class WhisperTest {
             assertTrue(silence.noSpeechProb > 0.3f || silence.avgLogProb < -0.5f, "silence: $silence")
         }
     }
+
+    @Test fun productionRejectsOutputThatHitsTheTokenLimit() {
+        assumeTrue("whisper assets not exported", modelReady)
+        val limited = WhisperModel.BASE.decodingOptions().copy(maxNewTokens = 1)
+        val speech = readWav("tts_pt.wav")
+        WhisperTranscriber.fromFolder(folder, options = limited, intraOpThreads = 2).use { recognizer ->
+            assertNull(recognizer.transcribe(speech, "pt"), "A token-limited fragment must not be displayed")
+        }
+        WhisperTranscriber.fromFolder(folder, options = limited.copy(rejectUnreliable = false), intraOpThreads = 2).use { recognizer ->
+            assertNotNull(recognizer.transcribe(speech, "pt"), "The reference mode still permits partial output")
+        }
+    }
 }

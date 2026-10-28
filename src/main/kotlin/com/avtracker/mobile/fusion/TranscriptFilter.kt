@@ -54,6 +54,18 @@ object TranscriptFilter {
 
         // A single short word with any elevated no-speech probability: common on silence/noise.
         val words = normalized.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        // A loop can have a normal introductory phrase and no punctuation, so the
+        // identical-sentence check above misses it (observed: "de a parte" x dozens).
+        val loopWords = lower.replace(Regex("[^\\p{L}\\p{N} ]"), " ")
+            .split(Regex("\\s+")).filter { it.isNotEmpty() }
+        for (width in 2..6) {
+            for (start in 0..(loopWords.size - width * 4)) {
+                val phrase = loopWords.subList(start, start + width)
+                if ((1..3).all { repeat ->
+                        loopWords.subList(start + repeat * width, start + (repeat + 1) * width) == phrase
+                    }) return false
+            }
+        }
         if (words.size <= 1 && normalized.length < 14 && noSpeechProb > 0.15f) return false
 
         return true

@@ -1,9 +1,19 @@
 <resources>
+    <string name="transcript_uncertain">Texto incerto: %1$s</string>
     <string name="app_name">AV Tracker</string>
+    <string name="transcription_model">Modelo de transcrição local</string>
+    <string name="whisper_small">Whisper Small · modelo maior, processamento mais lento</string>
+    <string name="whisper_base">Whisper Base · modelo mais leve</string>
+    <string name="use_vocalid_audio">Usar VocalID para vozes e transcrição (AV Tracker: só faces)</string>
+    <string name="status_vocalid_faces">Só faces · áudio no VocalID</string>
+    <string name="open_vocalid">Abrir VocalID</string>
+    <string name="vocalid_not_installed">O VocalID Jabra não está disponível neste dispositivo.</string>
+    <string name="vocalid_audio_hint">Inicie a sessão de áudio no VocalID. Aqui ficam apenas as faces; os falantes e a transcrição são exibidos no VocalID.</string>
     <string name="camera_permission_required">A permissão da câmera é necessária para a detecção</string>
     <string name="microphone_permission_required">Permissão do microfone negada: só vídeo (sem transcrição nem identificação de voz)</string>
     <string name="status_loading">Carregando modelos…</string>
     <string name="status_running">Ouvindo</string>
+    <string name="status_running_model">Ouvindo · Whisper %1$s</string>
     <string name="status_video_only">Só vídeo</string>
     <string name="status_error">Não foi possível carregar os modelos: %1$s</string>
     <string name="status_finishing">Encerrando a sessão…</string>

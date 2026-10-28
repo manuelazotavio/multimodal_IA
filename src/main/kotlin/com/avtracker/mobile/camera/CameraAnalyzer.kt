@@ -5,6 +5,8 @@ import android.graphics.Matrix
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.view.transform.ImageProxyTransformFactory
+import androidx.camera.view.transform.OutputTransform
 import com.avtracker.mobile.audio.AudioUtils
 import com.avtracker.mobile.pipeline.FrameResult
 import com.avtracker.mobile.pipeline.HeadTrackerPipeline
@@ -25,16 +27,28 @@ import com.avtracker.mobile.pipeline.HeadTrackerPipeline
 class CameraAnalyzer<T>(
     private val pipeline: HeadTrackerPipeline,
     private val onFrame: (frame: Bitmap, result: FrameResult, timestampSec: Double) -> T,
-    private val onResult: (result: FrameResult, extra: T, width: Int, height: Int, processingMs: Long) -> Unit
+    private val onResult: (result: FrameResult, extra: T, width: Int, height: Int, processingMs: Long, transform: OutputTransform) -> Unit
 ) : ImageAnalysis.Analyzer {
 
     override fun analyze(imageProxy: ImageProxy) {
         val start = System.currentTimeMillis()
+        val frameTimeSec = AudioUtils.nowSec()
         try {
-            val bitmap = imageProxy.toBitmap().rotated(imageProxy.imageInfo.rotationDegrees)
-            val result = pipeline.processFrame(bitmap)
-            val extra = onFrame(bitmap, result, AudioUtils.nowSec())
-            onResult(result, extra, bitmap.width, bitmap.height, System.currentTimeMillis() - start)
+            // Detection coordinates belong to the full, rotated buffer, not to a stretched preview.
+            val transform = ImageProxyTransformFactory().apply {
+                isUsingRotationDegrees = true
+                isUsingCropRect = false
+            }.getOutputTransform(imageProxy)
+            val original = imageProxy.toBitmap()
+            val bitmap = original.rotated(imageProxy.imageInfo.rotationDegrees)
+            try {
+                val result = pipeline.processFrame(bitmap)
+                val extra = onFrame(bitmap, result, frameTimeSec)
+                onResult(result, extra, bitmap.width, bitmap.height, System.currentTimeMillis() - start, transform)
+            } finally {
+                if (bitmap !== original) bitmap.recycle()
+                original.recycle()
+            }
         } catch (t: Throwable) {
             Log.e("CameraAnalyzer", "Frame processing failed", t)
         } finally {

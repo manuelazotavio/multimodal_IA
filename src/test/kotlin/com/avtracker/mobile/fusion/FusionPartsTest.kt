@@ -57,6 +57,8 @@ class FusionPartsTest {
     fun filter_rejectsRepetitionHallucination() {
         assertFalse(TranscriptFilter.accept("Thank you. Thank you. Thank you.", -0.2f, 0.01f))
         assertTrue(TranscriptFilter.accept("Thank you. Thanks a lot. Thank you.", -0.2f, 0.01f))
+        assertFalse(TranscriptFilter.accept("e depois vamos ao final " + "de a parte ".repeat(40), -0.2f, 0.01f))
+        assertTrue(TranscriptFilter.accept("A primeira parte e a segunda parte precisam de revisão.", -0.2f, 0.01f))
     }
 
     @Test
@@ -100,6 +102,22 @@ class FusionPartsTest {
     }
 
     // ---- FaceIdentitySync -------------------------------------------------------------------
+
+    @Test fun chunker_lowLatencyHasContinuousNewAudioEveryFourSeconds() {
+        val chunker = AudioChunker(lowLatency = true)
+        assertNull(chunker.next(timelineOf(3.9)))
+        val first = assertNotNull(chunker.next(timelineOf(4.0)))
+        assertEquals(100.0, first.startSec); assertEquals(104.0, first.endSec)
+        assertEquals(0, first.newZoneStartSamples)
+        assertNull(chunker.next(timelineOf(7.9)))
+        val second = assertNotNull(chunker.next(timelineOf(8.0)))
+        assertEquals(100.0, second.startSec); assertEquals(108.0, second.endSec)
+        assertEquals(4 * AudioUtils.SAMPLE_RATE, second.newZoneStartSamples)
+        val third = assertNotNull(chunker.next(timelineOf(12.0)))
+        assertEquals(104.0, third.startSec); assertEquals(112.0, third.endSec)
+        assertEquals(4 * AudioUtils.SAMPLE_RATE, third.newZoneStartSamples)
+        assertNull(chunker.next(timelineOf(15.9)))
+    }
 
     @Test
     fun faceSync_newTrackGetsAPersonAndKeepsItAcrossFrames() {

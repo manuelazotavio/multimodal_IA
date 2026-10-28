@@ -9,6 +9,8 @@ src/main/assets/face_embeddings/
 src/main/assets/voice_embeddings/
 src/main/assets/models/*.onnx
 src/main/assets/whisper/
+src/main/assets/whisper-small/
+src/main/assets/whisper-tiny/
 src/main/assets/ner/
 
 ### Android ###
@@ -57,3 +59,15 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+### Ambiente Python, modelos de origem e configuração local ###
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+/models/
+.env
+.env.*
+!.env.example
+*.key
+realtime_sessions/

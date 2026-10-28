@@ -66,6 +66,16 @@ class FusionEngineTest {
 
     // ---- processSegment ---------------------------------------------------------------------
 
+    @Test fun lowConfidenceSpeechIsMarkedUncertainAndRepetitionIsStillBlocked() {
+        val recognizer = Script(listOf("A reunião começa depois do almoço.", "de a parte ".repeat(30)), logProb = -1.4f)
+        val running = engine(emptyList(), recognizer = recognizer)
+        running.processSegment(tone(3.0, 0.1f), null, 10.0, 13.0)
+        assertTrue(running.transcript.single().uncertain)
+        assertTrue(com.avtracker.mobile.session.SessionSaver.transcriptText(running.transcript).contains("[texto incerto]"))
+        running.processSegment(tone(3.0, 0.1f), null, 14.0, 17.0)
+        assertEquals(1, running.transcript.size)
+    }
+
     @Test
     fun aKnownVoiceIsNamedByTheVerifier() {
         val engine = engine(listOf("Let us begin the meeting now."), verifier = SpeakerVerifier.fromMap(mapOf("Alice" to floatArrayOf(1f, 0f, 0f))))

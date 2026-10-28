@@ -4,8 +4,12 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
+import androidx.camera.view.PreviewView
+import androidx.camera.view.transform.CoordinateTransform
+import androidx.camera.view.transform.OutputTransform
 import com.avtracker.mobile.app.FrameOverlay
 import com.avtracker.mobile.pipeline.FrameResult
 import java.util.Locale
@@ -25,6 +29,8 @@ class OverlayView @JvmOverloads constructor(
     private var sourceWidth = 1
     private var sourceHeight = 1
     private var processingMs = 0L
+    var previewView: PreviewView? = null
+    private var imageTransform: OutputTransform? = null
 
     private var fps = 0f
     private var frameCount = 0
@@ -54,12 +60,13 @@ class OverlayView @JvmOverloads constructor(
         isAntiAlias = true
     }
 
-    fun update(result: FrameResult, overlay: FrameOverlay?, sourceWidth: Int, sourceHeight: Int, processingMs: Long) {
+    fun update(result: FrameResult, overlay: FrameOverlay?, sourceWidth: Int, sourceHeight: Int, processingMs: Long, imageTransform: OutputTransform) {
         this.result = result
         this.overlay = overlay
         this.sourceWidth = sourceWidth
         this.sourceHeight = sourceHeight
         this.processingMs = processingMs
+        this.imageTransform = imageTransform
 
         frameCount++
         val now = System.currentTimeMillis()
@@ -78,10 +85,13 @@ class OverlayView @JvmOverloads constructor(
         val frameResult = result ?: return
         if (sourceWidth <= 0 || sourceHeight <= 0) return
 
-        val scaleX = width.toFloat() / sourceWidth
-        val scaleY = height.toFloat() / sourceHeight
+        val source = imageTransform
+        val target = previewView?.outputTransform
+        // Wait for CameraX's preview transform rather than drawing incorrectly scaled boxes.
+        val coordinates = if (source != null && target != null) CoordinateTransform(source, target) else null
 
         for (person in frameResult.persons) {
+            if (coordinates == null) continue
             val fused = overlay?.labels?.get(person.trackId)
             val unknown = fused?.unknown ?: !person.identified
             val speaking = overlay?.speaking?.contains(person.trackId) == true
@@ -91,10 +101,12 @@ class OverlayView @JvmOverloads constructor(
                 else -> boxPaintKnown
             }
 
-            val left = person.bbox.x1 * scaleX
-            val top = person.bbox.y1 * scaleY
-            val right = person.bbox.x2 * scaleX
-            val bottom = person.bbox.y2 * scaleY
+            val bounds = RectF(person.bbox.x1.toFloat(), person.bbox.y1.toFloat(), person.bbox.x2.toFloat(), person.bbox.y2.toFloat())
+            coordinates.mapRect(bounds)
+            val left = bounds.left
+            val top = bounds.top
+            val right = bounds.right
+            val bottom = bounds.bottom
             canvas.drawRect(left, top, right, bottom, paint)
 
             val label = fused?.text ?: person.displayName

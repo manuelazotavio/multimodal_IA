@@ -4,6 +4,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
+import android.util.Log
 import com.avtracker.mobile.fusion.SpeechRecognizer
 import com.avtracker.mobile.voice.AssetFiles
 import kotlinx.serialization.Serializable
@@ -17,6 +18,7 @@ import java.util.PriorityQueue
 import java.util.Random
 import java.util.zip.Deflater
 import kotlin.math.exp
+import kotlin.math.ceil
 import kotlin.math.ln
 
 /** meta.json written by scripts/export_whisper.py. */
@@ -40,7 +42,8 @@ data class WhisperMeta(
     val startOfPrev: Int = 50361,
     val startOfLm: Int = 50360,
     /** The initial prompts ("pt", "en") already tokenized like faster-whisper does (` ` + prompt, no special tokens). */
-    val prompts: Map<String, List<Int>> = emptyMap()
+    val prompts: Map<String, List<Int>> = emptyMap(),
+    val modelName: String = "base"
 )
 
 data class TranscriptionResult(
@@ -57,6 +60,9 @@ data class TranscriptionResult(
  * 500 ms silence / 300 ms pad, initial prompt, no conditioning on previous text, the default temperature fallback and the
  * compression ratio / log-prob / no-speech thresholds).
  */
+/** Gate rejects clips with no detected speech while preserving words missed inside a speech clip. */
+enum class WhisperVadMode { REMOVE_SILENCE, SPEECH_GATE }
+
 data class WhisperOptions(
     val beamSize: Int = 5,
     val patience: Double = 1.0,
@@ -67,6 +73,9 @@ data class WhisperOptions(
     val logProbThreshold: Double = -1.0,
     val noSpeechThreshold: Double = 0.6,
     val vad: VadOptions? = VadOptions.AV_TRACKER,
+    val vadMode: WhisperVadMode = WhisperVadMode.REMOVE_SILENCE,
+    val rejectUnreliable: Boolean = false,
+    val maxTokensPerAudioSecond: Double? = null,
     val usePrompt: Boolean = true,
     /** Upper bound on generated tokens per attempt: a runaway repetition would otherwise cost minutes on a phone. */
     val maxNewTokens: Int = 224,
@@ -109,6 +118,8 @@ class WhisperTranscriber(
     private val options: WhisperOptions = WhisperOptions()
 ) : SpeechRecognizer, AutoCloseable {
 
+    val modelName: String get() = meta.modelName
+
     private val crossNames = List(meta.layers) { i -> listOf("cross_k_$i", "cross_v_$i") }.flatten()
     private val selfNames = List(meta.layers) { i -> listOf("self_k_$i", "self_v_$i") }.flatten()
 
@@ -131,8 +142,13 @@ class WhisperTranscriber(
         var speech = audio
         if (options.vad != null && vad != null) {
             val chunks = vad.speechTimestamps(audio, options.vad)
-            if (chunks.isEmpty()) return null
-            speech = SileroVad.collectChunks(audio, chunks)
+            if (chunks.isEmpty()) {
+                Log.d("WhisperTranscriber", "Rejected clip: VAD found no speech")
+                return null
+            }
+            if (options.vadMode == WhisperVadMode.REMOVE_SILENCE) {
+                speech = SileroVad.collectChunks(audio, chunks)
+            }
         }
 
         // The initial prompt only applies to the first window: with condition_on_previous_text=False the prompt is reset after it.
@@ -192,7 +208,7 @@ class WhisperTranscriber(
 
     // ---- one 30 s window ---------------------------------------------------------------------------------------------
 
-    private class Decoded(val tokens: List<Int>, val cumLogProb: Double, val noSpeechProb: Float) {
+    private class Decoded(val tokens: List<Int>, val cumLogProb: Double, val noSpeechProb: Float, val truncated: Boolean = false) {
         val avgLogProb: Double get() = cumLogProb / (tokens.size + 1)
     }
 
@@ -210,13 +226,26 @@ class WhisperTranscriber(
             prefix += listOf(meta.sot, languageId, meta.transcribe, meta.noTimestamps)
 
             withPrefix(cross, prefix.toIntArray()) { root, noSpeech ->
-                val attempt = generateWithFallback(root, prefix.size, cross, noSpeech)
+                val tokenBudget = options.maxTokensPerAudioSecond?.let {
+                    minOf(options.maxNewTokens, maxOf(32, ceil(audio.size / 16000.0 * it + 16).toInt()))
+                } ?: options.maxNewTokens
+                val attempt = generateWithFallback(root, prefix.size, cross, noSpeech, tokenBudget)
                 val decoded = attempt.decoded
+                if (options.rejectUnreliable && (decoded.truncated ||
+                        attempt.compressionRatio > options.compressionRatioThreshold ||
+                        decoded.avgLogProb < -2.0 ||
+                        (decoded.avgLogProb < options.logProbThreshold && decoded.noSpeechProb > 0.3f))) {
+                    Log.d("WhisperTranscriber", "Rejected result: truncated=${decoded.truncated}, tokens=${decoded.tokens.size}/$tokenBudget, avgLogProb=${decoded.avgLogProb}, noSpeech=${decoded.noSpeechProb}, compression=${attempt.compressionRatio}")
+                    return@withPrefix null
+                }
 
                 // no-speech check: skipped unless the average log-prob is high enough
                 var shouldSkip = decoded.noSpeechProb > options.noSpeechThreshold
                 if (decoded.avgLogProb > options.logProbThreshold) shouldSkip = false
-                if (shouldSkip) return@withPrefix null
+                if (shouldSkip) {
+                    Log.d("WhisperTranscriber", "Rejected result: noSpeech=${decoded.noSpeechProb}, avgLogProb=${decoded.avgLogProb}")
+                    return@withPrefix null
+                }
 
                 val text = tokens.decode(decoded.tokens)
                 if (text.isBlank()) return@withPrefix null
@@ -226,12 +255,12 @@ class WhisperTranscriber(
     }
 
     /** faster-whisper `generate_with_fallback`. */
-    private fun generateWithFallback(root: Step, prefixLen: Int, cross: Map<String, OnnxTensor>, noSpeech: Float): Attempt {
+    private fun generateWithFallback(root: Step, prefixLen: Int, cross: Map<String, OnnxTensor>, noSpeech: Float, tokenBudget: Int): Attempt {
         val all = ArrayList<Attempt>()
         val belowCompression = ArrayList<Attempt>()
 
         for (temperature in options.temperatures) {
-            val decoded = if (temperature > 0) sample(root, prefixLen, cross, noSpeech, temperature) else beamSearch(root, prefixLen, cross, noSpeech)
+            val decoded = if (temperature > 0) sample(root, prefixLen, cross, noSpeech, temperature, tokenBudget) else beamSearch(root, prefixLen, cross, noSpeech, tokenBudget)
             val ratio = compressionRatio(tokens.decode(decoded.tokens))
             val attempt = Attempt(decoded, temperature, ratio)
             all += attempt
@@ -250,17 +279,17 @@ class WhisperTranscriber(
 
     private class Hyp(val generated: List<Int>, val score: Double, val step: Step, val ownsStep: Boolean)
 
-    private class Finished(val generated: List<Int>, val cumLogProb: Double, val normalized: Double)
+    private class Finished(val generated: List<Int>, val cumLogProb: Double, val normalized: Double, val truncated: Boolean = false)
 
     /**
      * Beam search as CTranslate2 runs it for faster-whisper: [WhisperOptions.beamSize] hypotheses, the best `2 * beam`
      * candidates per step of which end-of-text ones count only within the first `beam`, patience-scaled stop once enough
      * hypotheses are finished, and the winner chosen by `cumulative log-prob / length ^ length_penalty`.
      */
-    private fun beamSearch(root: Step, prefixLen: Int, cross: Map<String, OnnxTensor>, noSpeech: Float): Decoded {
+    private fun beamSearch(root: Step, prefixLen: Int, cross: Map<String, OnnxTensor>, noSpeech: Float, tokenBudget: Int): Decoded {
         val beam = options.beamSize
         val maxCandidates = Math.round(beam * options.patience).toInt().coerceAtLeast(1)
-        val maxNew = minOf(options.maxNewTokens, meta.maxTargetPositions - prefixLen)
+        val maxNew = minOf(tokenBudget, meta.maxTargetPositions - prefixLen)
 
         var active = listOf(Hyp(emptyList(), 0.0, root, ownsStep = false))
         val finished = ArrayList<Finished>()
@@ -298,7 +327,7 @@ class WhisperTranscriber(
                     for (c in next) {
                         val h = active[c.parent]
                         val generated = h.generated + c.token
-                        finished += Finished(generated, c.score, c.score / generated.size.toDouble().pow(options.lengthPenalty))
+                        finished += Finished(generated, c.score, c.score / generated.size.toDouble().pow(options.lengthPenalty), truncated = true)
                     }
                     break
                 }
@@ -316,12 +345,12 @@ class WhisperTranscriber(
         }
 
         val best = finished.maxByOrNull { it.normalized } ?: return Decoded(emptyList(), 0.0, noSpeech)
-        return Decoded(best.generated, best.cumLogProb, noSpeech)
+        return Decoded(best.generated, best.cumLogProb, noSpeech, best.truncated)
     }
 
     /** `best_of` samples at [temperature] over the full distribution (CTranslate2 `sampling_topk=0`); the best by normalized log-prob wins. */
-    private fun sample(root: Step, prefixLen: Int, cross: Map<String, OnnxTensor>, noSpeech: Float, temperature: Double): Decoded {
-        val maxNew = minOf(options.maxNewTokens, meta.maxTargetPositions - prefixLen)
+    private fun sample(root: Step, prefixLen: Int, cross: Map<String, OnnxTensor>, noSpeech: Float, temperature: Double, tokenBudget: Int): Decoded {
+        val maxNew = minOf(tokenBudget, meta.maxTargetPositions - prefixLen)
         var best: Decoded? = null
         var bestScore = Double.NEGATIVE_INFINITY
 
@@ -351,7 +380,7 @@ class WhisperTranscriber(
             val normalized = cum / generated.size.coerceAtLeast(1).toDouble().pow(options.lengthPenalty)
             if (normalized > bestScore) {
                 bestScore = normalized
-                best = Decoded(generated, cum, noSpeech)
+                best = Decoded(generated, cum, noSpeech, truncated = generated.size >= maxNew)
             }
         }
         return best!!
@@ -500,15 +529,24 @@ class WhisperTranscriber(
             folder: File,
             env: OrtEnvironment = OrtEnvironment.getEnvironment(),
             vad: SileroVad? = null,
-            options: WhisperOptions = WhisperOptions()
+            options: WhisperOptions = WhisperOptions(),
+            intraOpThreads: Int? = null
         ): WhisperTranscriber {
             val meta = json.decodeFromString(WhisperMeta.serializer(), File(folder, "meta.json").readText())
             val tokens = WhisperTokens.parse(File(folder, "tokens.txt").readText())
-            val sessionOptions = { OrtSession.SessionOptions() }
+            fun openSession(name: String): OrtSession = OrtSession.SessionOptions().use { sessionOptions ->
+                if (intraOpThreads != null) {
+                    sessionOptions.setIntraOpNumThreads(intraOpThreads)
+                    sessionOptions.setInterOpNumThreads(1)
+                    sessionOptions.addConfigEntry("session.intra_op.allow_spinning", "0")
+                    sessionOptions.addConfigEntry("session.inter_op.allow_spinning", "0")
+                }
+                env.createSession(File(folder, name).absolutePath, sessionOptions)
+            }
             return WhisperTranscriber(
                 env,
-                env.createSession(File(folder, "encoder.onnx").absolutePath, sessionOptions()),
-                env.createSession(File(folder, "decoder.onnx").absolutePath, sessionOptions()),
+                openSession("encoder.onnx"),
+                openSession("decoder.onnx"),
                 meta,
                 tokens,
                 vad,
@@ -517,12 +555,12 @@ class WhisperTranscriber(
         }
 
         /** Assets live under assets/[dir]: encoder.onnx, decoder.onnx, tokens.txt, meta.json (and models/silero_vad_v6.onnx for the VAD). */
-        fun fromAssets(context: Context, dir: String = "whisper"): WhisperTranscriber {
+        fun fromAssets(context: Context, dir: String = "whisper", options: WhisperOptions = WhisperOptions()): WhisperTranscriber {
             val encoder = AssetFiles.materialize(context, "$dir/encoder.onnx")
             AssetFiles.materialize(context, "$dir/decoder.onnx")
             AssetFiles.materialize(context, "$dir/tokens.txt")
             AssetFiles.materialize(context, "$dir/meta.json")
-            return fromFolder(encoder.parentFile!!, vad = SileroVad.fromAssets(context))
+            return fromFolder(encoder.parentFile!!, vad = SileroVad.fromAssets(context), options = options, intraOpThreads = 2)
         }
     }
 }

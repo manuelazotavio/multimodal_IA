@@ -32,7 +32,8 @@ object SessionSaver {
         val hms = SimpleDateFormat("HH:mm:ss", Locale.ROOT)
         for (e in entries) {
             val who = e.speakerName?.takeIf { it.isNotEmpty() } ?: e.speakerId
-            append("[${hms.format(Date(e.wallMillis))}] $who: ${e.text}\n")
+            val uncertainty = if (e.uncertain) "[texto incerto] " else ""
+            append("[${hms.format(Date(e.wallMillis))}] $who: $uncertainty${e.text}\n")
         }
     }
 
